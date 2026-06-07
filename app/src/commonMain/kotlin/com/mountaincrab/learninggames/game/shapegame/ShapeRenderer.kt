@@ -61,6 +61,33 @@ object ShapeRenderer {
                 close()
             }
             ShapeType.STAR -> star(cx, cy, outer = r, inner = r * 0.45f, points = 5, rotationDeg = -90f)
+            ShapeType.HEXAGON -> polygon(cx, cy, r, sides = 6, rotationDeg = 0f)
+            ShapeType.OVAL -> Path().apply {
+                addOval(Rect(Offset(cx - r, cy - r * 0.68f), Size(r * 2, r * 1.36f)))
+            }
+            ShapeType.HEART -> Path().apply {
+                moveTo(cx, cy + r * 0.8f)
+                cubicTo(cx - r * 1.1f, cy - r * 0.2f, cx - r * 0.5f, cy - r * 1.0f, cx, cy - r * 0.3f)
+                cubicTo(cx + r * 0.5f, cy - r * 1.0f, cx + r * 1.1f, cy - r * 0.2f, cx, cy + r * 0.8f)
+                close()
+            }
+            ShapeType.CROSS -> Path().apply {
+                val a = r * 0.34f   // arm half-width
+                val b = r * 0.95f   // arm half-length
+                moveTo(cx - a, cy - b)
+                lineTo(cx + a, cy - b)
+                lineTo(cx + a, cy - a)
+                lineTo(cx + b, cy - a)
+                lineTo(cx + b, cy + a)
+                lineTo(cx + a, cy + a)
+                lineTo(cx + a, cy + b)
+                lineTo(cx - a, cy + b)
+                lineTo(cx - a, cy + a)
+                lineTo(cx - b, cy + a)
+                lineTo(cx - b, cy - a)
+                lineTo(cx - a, cy - a)
+                close()
+            }
         }
     }
 
