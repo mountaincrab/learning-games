@@ -1,21 +1,18 @@
 package com.mountaincrab.learninggames.game.shapegame
 
+import android.content.Context
 import android.media.AudioAttributes
-import android.media.AudioFormat
-import android.media.AudioTrack
+import android.media.MediaPlayer
+import android.media.SoundPool
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
-import java.util.concurrent.Executors
-import kotlin.math.PI
-import kotlin.math.exp
-import kotlin.math.sin
-
-private const val SAMPLE_RATE = 44_100
+import androidx.compose.ui.platform.LocalContext
 
 @Composable
 actual fun rememberGameAudio(): GameAudio {
-    val audio = remember { AndroidGameAudio() }
+    val context = LocalContext.current
+    val audio = remember { AndroidGameAudio(context) }
     DisposableEffect(Unit) {
         onDispose { audio.release() }
     }
@@ -23,159 +20,69 @@ actual fun rememberGameAudio(): GameAudio {
 }
 
 /**
- * Synthesises all audio with [AudioTrack] — no asset files. The chime is a sparkly
- * ascending arpeggio with bell-like decay; the music is a short, gentle pentatonic
- * loop with a soft rhythmic pulse.
+ * Plays bundled OGG audio shipped in `res/raw`:
+ *  - `magic_chime.ogg`      — short sound effect on each match (via [SoundPool])
+ *  - `background_music.ogg` — gentle looping music (via [MediaPlayer])
+ *
+ * Resources are resolved by name, so the app still builds and simply stays quiet
+ * if a file hasn't been added yet.
  */
-private class AndroidGameAudio : GameAudio {
-    // Cached pool so overlapping chimes can ring together without blocking.
-    private val sfx = Executors.newCachedThreadPool()
-    private val musicExec = Executors.newSingleThreadExecutor()
+private class AndroidGameAudio(context: Context) : GameAudio {
+    private val appContext = context.applicationContext
 
-    private val chimeData by lazy { synthChime() }
-    private val musicData by lazy { synthMusicLoop() }
+    private val soundPool = SoundPool.Builder()
+        .setMaxStreams(4)
+        .setAudioAttributes(
+            AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_GAME)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .build()
+        )
+        .build()
 
-    @Volatile private var released = false
-    @Volatile private var musicTrack: AudioTrack? = null
+    @Volatile private var chimeId = 0
+    @Volatile private var chimeReady = false
+    private var music: MediaPlayer? = null
 
-    override fun playMagicChime() {
-        if (released) return
-        sfx.execute {
-            val track = newStaticTrack(chimeData, loop = false, volume = 0.55f)
-            track.play()
-            // Let it ring out, then free the track.
-            Thread.sleep(chimeData.size * 1000L / SAMPLE_RATE + 120)
-            runCatching { track.release() }
+    init {
+        val res = rawId("magic_chime")
+        if (res != 0) {
+            soundPool.setOnLoadCompleteListener { _, sampleId, status ->
+                if (sampleId == chimeId && status == 0) chimeReady = true
+            }
+            chimeId = soundPool.load(appContext, res, 1)
         }
     }
 
+    override fun playMagicChime() {
+        if (chimeReady) soundPool.play(chimeId, 0.7f, 0.7f, 1, 0, 1f)
+    }
+
     override fun startMusic() {
-        if (released) return
-        musicExec.execute {
-            if (musicTrack != null || released) return@execute
-            val track = newStaticTrack(musicData, loop = true, volume = 0.26f)
-            track.play()
-            musicTrack = track
+        if (music != null) return
+        val res = rawId("background_music")
+        if (res == 0) return
+        music = MediaPlayer.create(appContext, res)?.apply {
+            isLooping = true
+            setVolume(0.35f, 0.35f)
+            start()
         }
     }
 
     override fun stopMusic() {
-        musicExec.execute {
-            musicTrack?.let { t ->
-                runCatching { t.stop() }
-                runCatching { t.release() }
-            }
-            musicTrack = null
+        music?.let { mp ->
+            runCatching { if (mp.isPlaying) mp.stop() }
+            mp.release()
         }
+        music = null
     }
 
     fun release() {
-        released = true
         stopMusic()
-        musicExec.shutdown()
-        sfx.shutdown()
+        soundPool.release()
     }
 
-    private fun newStaticTrack(data: ShortArray, loop: Boolean, volume: Float): AudioTrack {
-        val bytes = data.size * 2
-        val track = AudioTrack.Builder()
-            .setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_GAME)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                    .build()
-            )
-            .setAudioFormat(
-                AudioFormat.Builder()
-                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                    .setSampleRate(SAMPLE_RATE)
-                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                    .build()
-            )
-            .setBufferSizeInBytes(bytes)
-            .setTransferMode(AudioTrack.MODE_STATIC)
-            .build()
-        track.write(data, 0, data.size)
-        track.setVolume(volume)
-        if (loop) track.setLoopPoints(0, data.size, -1)
-        return track
-    }
-}
-
-// --- Synthesis ----------------------------------------------------------------
-
-private fun floatToPcm(f: FloatArray): ShortArray {
-    val out = ShortArray(f.size)
-    for (i in f.indices) {
-        val v = (f[i] * Short.MAX_VALUE).coerceIn(-32_767f, 32_767f)
-        out[i] = v.toInt().toShort()
-    }
-    return out
-}
-
-/** A bell tone: near-instant attack, exponential decay. */
-private fun addBell(buf: FloatArray, startSec: Float, freq: Float, amp: Float, decay: Float, dur: Float) {
-    val start = (startSec * SAMPLE_RATE).toInt()
-    val n = (dur * SAMPLE_RATE).toInt()
-    for (i in 0 until n) {
-        val idx = start + i
-        if (idx < 0) continue
-        if (idx >= buf.size) break
-        val t = i.toFloat() / SAMPLE_RATE
-        val env = exp(-t / decay) * (1f - exp(-t / 0.004f))
-        buf[idx] += sin(2.0 * PI * freq * t).toFloat() * amp * env
-    }
-}
-
-/** A soft sine note with smooth attack/release (no clicks at the loop seam). */
-private fun addSoft(buf: FloatArray, startSec: Float, freq: Float, amp: Float, dur: Float, decay: Float = 0.25f) {
-    val start = (startSec * SAMPLE_RATE).toInt()
-    val n = (dur * SAMPLE_RATE).toInt()
-    val attack = 0.02f
-    val release = 0.06f
-    for (i in 0 until n) {
-        val idx = start + i
-        if (idx < 0) continue
-        if (idx >= buf.size) break
-        val t = i.toFloat() / SAMPLE_RATE
-        val a = if (t < attack) t / attack else 1f
-        val d = exp(-t / decay)
-        val r = if (t > dur - release) ((dur - t) / release).coerceIn(0f, 1f) else 1f
-        buf[idx] += sin(2.0 * PI * freq * t).toFloat() * amp * a * d * r
-    }
-}
-
-private fun synthChime(): ShortArray {
-    val dur = 1.4f
-    val buf = FloatArray((dur * SAMPLE_RATE).toInt())
-    // Ascending high pentatonic arpeggio + an octave shimmer on top.
-    val notes = floatArrayOf(523.25f, 659.25f, 783.99f, 987.77f, 1174.66f, 1567.98f)
-    for ((i, f) in notes.withIndex()) {
-        addBell(buf, startSec = i * 0.07f, freq = f, amp = 0.15f, decay = 0.5f, dur = 1.0f)
-        addBell(buf, startSec = i * 0.07f, freq = f * 2f, amp = 0.05f, decay = 0.35f, dur = 0.7f)
-    }
-    return floatToPcm(buf)
-}
-
-private fun synthMusicLoop(): ShortArray {
-    val beat = 0.5f
-    val beats = 8
-    val buf = FloatArray((beat * beats * SAMPLE_RATE).toInt())
-
-    // Gentle C-major-pentatonic melody.
-    val c5 = 523.25f; val d5 = 587.33f; val e5 = 659.25f; val g5 = 783.99f; val a5 = 880.0f
-    val melody = floatArrayOf(e5, g5, a5, g5, e5, d5, c5, d5)
-    for ((i, f) in melody.withIndex()) {
-        addSoft(buf, i * beat, f, amp = 0.13f, dur = beat * 0.9f)
-    }
-
-    // Soft bass pulse on beats 1 and 5 for a calm rhythm.
-    addSoft(buf, 0f, 130.81f, amp = 0.16f, dur = beat * 1.6f, decay = 0.5f)        // C3
-    addSoft(buf, 4 * beat, 196.0f, amp = 0.16f, dur = beat * 1.6f, decay = 0.5f)   // G3
-
-    // A whisper-quiet off-beat tick keeps things gently rhythmic.
-    for (b in 0 until beats) {
-        addSoft(buf, b * beat + beat * 0.5f, 2200f, amp = 0.025f, dur = 0.05f, decay = 0.03f)
-    }
-    return floatToPcm(buf)
+    /** Resource id of a `res/raw/<name>` file, or 0 if it isn't bundled. */
+    private fun rawId(name: String): Int =
+        appContext.resources.getIdentifier(name, "raw", appContext.packageName)
 }
