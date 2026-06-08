@@ -6,6 +6,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import com.mountaincrab.learninggames.game.shapegame.ShapeGameScreen
+import com.mountaincrab.learninggames.game.trumpergame.TrumperGameScreen
 import com.mountaincrab.learninggames.ui.menu.GameId
 import com.mountaincrab.learninggames.ui.menu.IslandMenuScreen
 import com.mountaincrab.learninggames.ui.settings.SettingsScreen
@@ -35,6 +36,7 @@ fun App() {
             is Screen.Settings -> SettingsScreen(onBack = { screen = Screen.Menu })
             is Screen.Game -> when (s.id) {
                 GameId.MAGIC_HAT -> ShapeGameScreen(onBack = { screen = Screen.Menu })
+                GameId.STINKY_TRUMPERS -> TrumperGameScreen(onBack = { screen = Screen.Menu })
             }
         }
     }
