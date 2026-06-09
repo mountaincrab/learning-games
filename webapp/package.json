@@ -4,11 +4,13 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "build:shared": "cd .. && ./gradlew :shared:jsBrowserProductionLibraryDistribution",
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview"
   },
   "dependencies": {
+    "learning-games-shared": "file:../shared/build/dist/js/productionLibrary",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },

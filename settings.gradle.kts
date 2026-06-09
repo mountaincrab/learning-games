@@ -21,3 +21,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "LearningGames"
 include(":app")
+include(":shared")

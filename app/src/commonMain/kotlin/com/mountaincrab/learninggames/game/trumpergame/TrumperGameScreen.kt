@@ -27,6 +27,8 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
+import com.mountaincrab.learninggames.game.observeGameState
+import com.mountaincrab.learninggames.geometry.toOffset
 import com.mountaincrab.learninggames.ui.components.BackButton
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -34,16 +36,8 @@ import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.random.Random
 
-/** Per-character geometry, computed once from the stage size (px). [bases] are the
- * resting body centres (at scale 1); the feet stay planted while the tummy swells
- * upward. */
-private data class TrumperLayout(
-    val bases: List<Offset>,
-    val bodyR: Float,
-    val groundY: Float,
-)
-
-private const val BLOAT_SCALE = 1.7f
+// TrumperLayout/computeTrumperLayout/BLOAT_SCALE/trumperBodyCenter live in the
+// `shared` module (same package), so the geometry is identical to the webapp's.
 
 /** Distinct, friendly body colours for the four characters. */
 private val BODY_COLORS = listOf(
@@ -52,21 +46,6 @@ private val BODY_COLORS = listOf(
     Color(0xFFFFC857), // yellow
     Color(0xFF9D8DF1), // purple
 )
-
-private fun computeTrumperLayout(w: Float, h: Float): TrumperLayout {
-    val columnW = w / TrumperGameState.COUNT
-    val bodyR = minOf(columnW * 0.30f, h * 0.18f)
-    val groundY = h * 0.80f
-    val bases = (0 until TrumperGameState.COUNT).map { i ->
-        Offset(columnW * (i + 0.5f), groundY - bodyR)
-    }
-    return TrumperLayout(bases = bases, bodyR = bodyR, groundY = groundY)
-}
-
-/** Current drawn body centre for a character, given its swell [scale]; the feet stay
- * planted on the ground while the belly grows upward. */
-private fun bodyCenter(base: Offset, bodyR: Float, scale: Float): Offset =
-    Offset(base.x, (base.y + bodyR) - bodyR * scale)
 
 @Composable
 fun TrumperGameScreen(onBack: () -> Unit) {
@@ -84,6 +63,9 @@ fun TrumperGameScreen(onBack: () -> Unit) {
         val h = constraints.maxHeight.toFloat()
         val layout = remember(w, h) { computeTrumperLayout(w, h) }
         val scope = rememberCoroutineScope()
+
+        // Recompose whenever the shared (Compose-free) game state mutates.
+        observeGameState(state)
 
         // Per-character animation: belly swell scale, and a 0→1 gas-puff burst.
         val bellyScale = remember { List(TrumperGameState.COUNT) { Animatable(1f) } }
@@ -121,7 +103,7 @@ fun TrumperGameScreen(onBack: () -> Unit) {
                     detectTapGestures { tap ->
                         for (i in layout.bases.indices) {
                             if (!state.isBloated(i)) continue
-                            val center = bodyCenter(layout.bases[i], layout.bodyR, bellyScale[i].value)
+                            val center = trumperBodyCenter(layout.bases[i], layout.bodyR, bellyScale[i].value).toOffset()
                             val r = layout.bodyR * bellyScale[i].value
                             if ((tap - center).getDistance() <= r * 1.1f) {
                                 if (state.release(i)) {
@@ -140,7 +122,7 @@ fun TrumperGameScreen(onBack: () -> Unit) {
             drawGround(layout.groundY)
             for (i in layout.bases.indices) {
                 val scale = bellyScale[i].value
-                val center = bodyCenter(layout.bases[i], layout.bodyR, scale)
+                val center = trumperBodyCenter(layout.bases[i], layout.bodyR, scale).toOffset()
                 // Gas puffs sit behind the character.
                 if (gas[i].value > 0f && gas[i].value < 1f) {
                     drawGas(center, layout.bodyR, gas[i].value)

@@ -7,115 +7,42 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
-import kotlin.math.PI
-import kotlin.math.cos
+import com.mountaincrab.learninggames.geometry.OP_ARC
+import com.mountaincrab.learninggames.geometry.OP_CLOSE
+import com.mountaincrab.learninggames.geometry.OP_CUBIC
+import com.mountaincrab.learninggames.geometry.OP_ELLIPSE
+import com.mountaincrab.learninggames.geometry.OP_LINE
+import com.mountaincrab.learninggames.geometry.OP_MOVE
+import com.mountaincrab.learninggames.geometry.OP_RECT
 import kotlin.math.min
-import kotlin.math.sin
 
 /**
- * Builds [Path]s for each [ShapeType], centered within a box of the given [size].
- * The same path is used for the empty outline (stroked) and the filled piece.
+ * Interprets the shared, renderer-neutral shape geometry (see `ShapeGeometry` in the
+ * `shared` module) into Compose [Path]s. The same path is used for the empty outline
+ * (stroked) and the filled piece.
  */
 object ShapeRenderer {
 
     fun pathFor(type: ShapeType, size: Size): Path {
-        val w = size.width
-        val h = size.height
-        val cx = w / 2f
-        val cy = h / 2f
-        val r = min(w, h) / 2f
-        return when (type) {
-            ShapeType.CIRCLE -> Path().apply {
-                addOval(Rect(Offset(cx - r, cy - r), Size(r * 2, r * 2)))
-            }
-            ShapeType.SQUARE -> Path().apply {
-                val s = r * 1.6f
-                addRect(Rect(Offset(cx - s / 2, cy - s / 2), Size(s, s)))
-            }
-            ShapeType.RECTANGLE -> Path().apply {
-                addRect(Rect(Offset(cx - w * 0.42f, cy - h * 0.28f), Size(w * 0.84f, h * 0.56f)))
-            }
-            ShapeType.TRIANGLE -> polygon(cx, cy, r, sides = 3, rotationDeg = -90f)
-            ShapeType.PENTAGON -> polygon(cx, cy, r, sides = 5, rotationDeg = -90f)
-            ShapeType.DIAMOND -> Path().apply {
-                moveTo(cx, cy - r)
-                lineTo(cx + r * 0.8f, cy)
-                lineTo(cx, cy + r)
-                lineTo(cx - r * 0.8f, cy)
-                close()
-            }
-            ShapeType.DOME -> Path().apply {
-                // Flat-bottomed arch: semicircle top on a short rectangular base.
-                val left = cx - r
-                val right = cx + r
-                val baseTop = cy + r * 0.4f
-                moveTo(left, baseTop)
-                lineTo(left, cy)
-                arcTo(
-                    rect = Rect(Offset(left, cy - r), Size(r * 2, r * 2)),
-                    startAngleDegrees = 180f,
-                    sweepAngleDegrees = 180f,
+        val path = Path()
+        for (cmd in pathCommandsFor(type, size.width, size.height)) {
+            when (cmd.op) {
+                OP_MOVE -> path.moveTo(cmd.a, cmd.b)
+                OP_LINE -> path.lineTo(cmd.a, cmd.b)
+                OP_CUBIC -> path.cubicTo(cmd.a, cmd.b, cmd.c, cmd.d, cmd.e, cmd.f)
+                OP_ELLIPSE -> path.addOval(
+                    Rect(Offset(cmd.a - cmd.c, cmd.b - cmd.d), Size(cmd.c * 2, cmd.d * 2))
+                )
+                OP_ARC -> path.arcTo(
+                    rect = Rect(Offset(cmd.a - cmd.c, cmd.b - cmd.c), Size(cmd.c * 2, cmd.c * 2)),
+                    startAngleDegrees = cmd.d,
+                    sweepAngleDegrees = cmd.e,
                     forceMoveTo = false,
                 )
-                lineTo(right, baseTop)
-                close()
-            }
-            ShapeType.STAR -> star(cx, cy, outer = r, inner = r * 0.45f, points = 5, rotationDeg = -90f)
-            ShapeType.HEXAGON -> polygon(cx, cy, r, sides = 6, rotationDeg = 0f)
-            ShapeType.OVAL -> Path().apply {
-                addOval(Rect(Offset(cx - r, cy - r * 0.68f), Size(r * 2, r * 1.36f)))
-            }
-            ShapeType.HEART -> Path().apply {
-                moveTo(cx, cy + r * 0.8f)
-                cubicTo(cx - r * 1.1f, cy - r * 0.2f, cx - r * 0.5f, cy - r * 1.0f, cx, cy - r * 0.3f)
-                cubicTo(cx + r * 0.5f, cy - r * 1.0f, cx + r * 1.1f, cy - r * 0.2f, cx, cy + r * 0.8f)
-                close()
-            }
-            ShapeType.CROSS -> Path().apply {
-                val a = r * 0.34f   // arm half-width
-                val b = r * 0.95f   // arm half-length
-                moveTo(cx - a, cy - b)
-                lineTo(cx + a, cy - b)
-                lineTo(cx + a, cy - a)
-                lineTo(cx + b, cy - a)
-                lineTo(cx + b, cy + a)
-                lineTo(cx + a, cy + a)
-                lineTo(cx + a, cy + b)
-                lineTo(cx - a, cy + b)
-                lineTo(cx - a, cy + a)
-                lineTo(cx - b, cy + a)
-                lineTo(cx - b, cy - a)
-                lineTo(cx - a, cy - a)
-                close()
+                OP_RECT -> path.addRect(Rect(Offset(cmd.a, cmd.b), Size(cmd.c, cmd.d)))
+                OP_CLOSE -> path.close()
             }
         }
-    }
-
-    private fun polygon(cx: Float, cy: Float, r: Float, sides: Int, rotationDeg: Float): Path {
-        val path = Path()
-        val rot = rotationDeg * PI.toFloat() / 180f
-        for (i in 0 until sides) {
-            val a = rot + 2f * PI.toFloat() * i / sides
-            val x = cx + r * cos(a)
-            val y = cy + r * sin(a)
-            if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
-        }
-        path.close()
-        return path
-    }
-
-    private fun star(cx: Float, cy: Float, outer: Float, inner: Float, points: Int, rotationDeg: Float): Path {
-        val path = Path()
-        val rot = rotationDeg * PI.toFloat() / 180f
-        val steps = points * 2
-        for (i in 0 until steps) {
-            val rad = if (i % 2 == 0) outer else inner
-            val a = rot + PI.toFloat() * i / points
-            val x = cx + rad * cos(a)
-            val y = cy + rad * sin(a)
-            if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
-        }
-        path.close()
         return path
     }
 

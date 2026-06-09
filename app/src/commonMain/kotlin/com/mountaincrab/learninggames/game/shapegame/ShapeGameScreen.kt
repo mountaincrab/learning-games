@@ -46,8 +46,10 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+import com.mountaincrab.learninggames.game.observeGameState
 import com.mountaincrab.learninggames.game.shapegame.ShapeRenderer.drawFilled
 import com.mountaincrab.learninggames.game.shapegame.ShapeRenderer.drawOutline
+import com.mountaincrab.learninggames.geometry.toOffset
 import com.mountaincrab.learninggames.ui.components.BackButton
 import kotlinx.coroutines.launch
 import kotlin.math.PI
@@ -57,88 +59,8 @@ import kotlin.math.hypot
 import kotlin.math.roundToInt
 import kotlin.math.sin
 
-/** Geometry for the upside-down hat, the shape outlines and the piece tray,
- * computed once from the stage size (px). The hat's mouth (the hole the shapes
- * come from) sits at the top; the closed crown points down. */
-private data class HatLayout(
-    val cx: Float,
-    val openingCenter: Offset,
-    val openingW: Float,
-    val openingH: Float,
-    val brimW: Float,
-    val brimH: Float,
-    val bodyTopY: Float,
-    val bodyBottomY: Float,
-    val bodyTopHalf: Float,
-    val bodyBotHalf: Float,
-    val bandY: Float,
-    val bandH: Float,
-    val slotCenters: List<Offset>,
-    val slotSize: Float,
-    val trayHomes: List<Offset>,
-    val pieceSize: Float,
-    val wandScale: Float,
-)
-
-private const val GRID_ROWS = 4
-private const val GRID_COLS = 3
-
-private fun computeHatLayout(w: Float, h: Float): HatLayout {
-    val cx = w * 0.34f
-    val m = minOf(w, h)
-    val slotSize = m * 0.10f
-    val pieceSize = m * 0.12f
-
-    // Upside-down hat: wide mouth at the top, narrowing to the closed crown below.
-    val bodyTopY = h * 0.22f
-    val bodyBottomY = h * 0.86f
-    val bodyTopHalf = w * 0.21f
-    val bodyBotHalf = w * 0.165f
-
-    // 4x3 grid of outlines, kept inside the narrowest (bottom) part of the body.
-    val gridTop = h * 0.34f
-    val gridBottom = h * 0.78f
-    val gridHalf = bodyBotHalf * 0.74f
-    val centers = ArrayList<Offset>(GRID_ROWS * GRID_COLS)
-    for (i in 0 until GRID_ROWS * GRID_COLS) {
-        val r = i / GRID_COLS
-        val c = i % GRID_COLS
-        val fx = c.toFloat() / (GRID_COLS - 1)
-        val fy = r.toFloat() / (GRID_ROWS - 1)
-        centers += Offset(
-            (cx - gridHalf) + (gridHalf * 2f) * fx,
-            gridTop + (gridBottom - gridTop) * fy,
-        )
-    }
-
-    // Tray: three pieces stacked vertically on the right, centred.
-    val trayX = w * 0.86f
-    val gap = pieceSize * 1.55f
-    val firstCy = h * 0.5f - gap
-    val homes = (0 until ShapeGameState.TRAY_SIZE).map { i ->
-        Offset(trayX - pieceSize / 2f, (firstCy + gap * i) - pieceSize / 2f)
-    }
-
-    return HatLayout(
-        cx = cx,
-        openingCenter = Offset(cx, bodyTopY),
-        openingW = bodyTopHalf * 2f * 0.86f,
-        openingH = h * 0.07f,
-        brimW = bodyTopHalf * 2f * 1.25f,
-        brimH = h * 0.085f,
-        bodyTopY = bodyTopY,
-        bodyBottomY = bodyBottomY,
-        bodyTopHalf = bodyTopHalf,
-        bodyBotHalf = bodyBotHalf,
-        bandY = bodyTopY + (bodyBottomY - bodyTopY) * 0.14f,
-        bandH = h * 0.05f,
-        slotCenters = centers,
-        slotSize = slotSize,
-        trayHomes = homes,
-        pieceSize = pieceSize,
-        wandScale = minOf(h * 0.45f, w * 0.22f),
-    )
-}
+// HatLayout/computeHatLayout live in the `shared` module (same package), so the
+// geometry is identical to the webapp's.
 
 @Composable
 fun ShapeGameScreen(onBack: () -> Unit) {
@@ -162,6 +84,9 @@ fun ShapeGameScreen(onBack: () -> Unit) {
         val layout = remember(w, h) { computeHatLayout(w, h) }
         val scope = rememberCoroutineScope()
 
+        // Recompose whenever the shared (Compose-free) game state mutates.
+        observeGameState(state)
+
         // Wand sweep over the hole, played after each correct match.
         var wandWaving by remember { mutableStateOf(false) }
         val wandProgress = remember { Animatable(0f) }
@@ -184,7 +109,7 @@ fun ShapeGameScreen(onBack: () -> Unit) {
             }
             // Wand sweep + sparkles over the hat's mouth.
             if (wandWaving) {
-                drawWand(layout.openingCenter, layout.wandScale, wandProgress.value)
+                drawWand(layout.openingCenter.toOffset(), layout.wandScale, wandProgress.value)
             }
         }
 
@@ -193,7 +118,7 @@ fun ShapeGameScreen(onBack: () -> Unit) {
         state.tray.forEachIndexed { index, piece ->
             if (piece != null) {
                 key(index) {
-                    val home = layout.trayHomes[index]
+                    val home = layout.trayHomes[index].toOffset()
                     val pieceOffset = remember { Animatable(home, Offset.VectorConverter) }
                     val pop = remember { Animatable(1f) }
                     // A fresh piece pops into the tray.
