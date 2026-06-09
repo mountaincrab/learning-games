@@ -28,6 +28,19 @@ Install on a device/emulator:
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
+## Web app
+
+`webapp/` contains a web version of the game (React + TypeScript + Tailwind + Vite)
+that replicates the Android app: the island menu, both games and the settings screen.
+
+```bash
+cd webapp && npm install && npm run dev   # local dev server
+cd webapp && npm run build                # production build → webapp/dist
+```
+
+It deploys to Firebase Hosting — see [docs/WEBAPP_DEPLOYMENT.md](docs/WEBAPP_DEPLOYMENT.md)
+for the one-time Firebase setup and deploy steps.
+
 ## Versioning & releases
 
 Version numbers are derived from git (see `app/build.gradle.kts`) — no manual bumps.
