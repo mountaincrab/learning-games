@@ -1,0 +1,34 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  /* Kid-friendly: no accidental text selection or long-press menus while playing. */
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+body {
+  font-family: ui-rounded, 'Comic Sans MS', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+canvas {
+  touch-action: none;
+  display: block;
+}
+
+.portrait-hint {
+  display: none;
+}
+
+@media (orientation: portrait) {
+  .portrait-hint {
+    display: flex;
+  }
+}

@@ -1,8 +1,9 @@
 # Learning Games — Claude guidance
 
 A landscape Android game for young children (learn-through-play). One Gradle module
-(`app/`) built with **Compose Multiplatform**. No Firebase, no database, no persistence —
-game state is in-memory.
+(`app/`) built with **Compose Multiplatform**. No database, no persistence — game
+state is in-memory. A web version lives in `webapp/` (see below); the only Firebase
+product used is Hosting for that web app.
 
 ## Commit messages (required: Conventional Commits)
 
@@ -69,6 +70,36 @@ app/src/
   `expect`.
 - No `material-icons` dependency — draw glyphs with `Canvas`/`Path` or use text/emoji
   (see `BackButton`, the settings gear, padlocks).
+
+## Web app (`webapp/`)
+
+A web replica of the Android app: React + TypeScript + Tailwind + Vite (same stack as
+the Crab Do webapp), deployed to Firebase Hosting (`firebase.json` at the repo root
+serves `webapp/dist` as an SPA). Setup/deploy steps: `docs/WEBAPP_DEPLOYMENT.md`.
+
+```bash
+cd webapp && npm run dev          # dev server
+cd webapp && npx tsc --noEmit     # type check
+cd webapp && npm run build        # tsc + vite build → webapp/dist
+```
+
+Structure mirrors the Android `commonMain` packages (`src/ui/menu/`, `src/ui/settings/`,
+`src/game/<name>/`). Non-obvious points:
+
+- **Games render on `<canvas>`** via a requestAnimationFrame loop (`useGameCanvas`),
+  porting the Compose `DrawScope` code near 1:1. Game logic/state classes
+  (`ShapeGameState`, `TrumperGameState`) are direct ports of the Kotlin classes —
+  keep them in sync when game rules change.
+- `anim.ts` has a `Spring` standing in for Compose's `Animatable`; layout functions
+  (`computeHatLayout`, `computeTrumperLayout`) are copied from the Kotlin screens, so
+  geometry tweaks should be applied to both.
+- **Audio is synthesised with Web Audio** (`src/audio/synth.ts` + per-game audio
+  modules) — no audio assets are shipped, unlike Android's `res/raw` OGGs.
+- Version string comes from `git describe` baked in at build time (`vite.config.ts`,
+  `__APP_VERSION__`), mirroring the Android git-derived versioning.
+- When adding a game: create `src/game/<name>/`, register it in
+  `src/ui/menu/GameCatalog.tsx` (SVG icon instead of a Canvas lambda), and wire it in
+  `src/App.tsx` — same three steps as Android.
 
 ## Adding a new game
 
