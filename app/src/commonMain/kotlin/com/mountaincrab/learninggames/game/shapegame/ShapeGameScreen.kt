@@ -30,11 +30,13 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.translate
@@ -91,9 +93,24 @@ fun ShapeGameScreen(onBack: () -> Unit) {
         var wandWaving by remember { mutableStateOf(false) }
         val wandProgress = remember { Animatable(0f) }
 
-        // ---- Hat, outlines, matched fills, wand ----
+        // ---- Stage, hat, outlines, matched fills, wand ----
         androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
+            drawBackdrop()
+            drawFloor(layout.cx)
             drawCurtains()
+            // Strings the waiting tray pieces dangle from.
+            state.tray.forEachIndexed { i, piece ->
+                if (piece != null) {
+                    val home = layout.trayHomes[i]
+                    val sx = home.x + layout.pieceSize / 2f
+                    drawLine(
+                        color = Color.White.copy(alpha = 0.30f),
+                        start = Offset(sx, size.height * 0.15f),
+                        end = Offset(sx, home.y + layout.pieceSize * 0.12f),
+                        strokeWidth = size.minDimension * 0.004f,
+                    )
+                }
+            }
             drawHat(layout)
             // Shape outlines / matched fills.
             state.slots.forEachIndexed { i, slot ->
@@ -103,7 +120,7 @@ fun ShapeGameScreen(onBack: () -> Unit) {
                     if (state.isFilled(slot.id)) {
                         drawFilled(slot.type, Size(s, s), slot.type.fillColor)
                     } else {
-                        drawOutline(slot.type, Size(s, s), Color.White.copy(alpha = 0.85f), s * 0.045f)
+                        drawOutline(slot.type, Size(s, s), Color(0xFFE3C8FF).copy(alpha = 0.9f), s * 0.045f)
                     }
                 }
             }
@@ -209,45 +226,233 @@ fun ShapeGameScreen(onBack: () -> Unit) {
 
 // --- Canvas drawing helpers ---------------------------------------------------
 
+/** Fixed star positions (x/y as stage fractions, plus a 0..1 brightness). */
+private val STAGE_STARS = listOf(
+    Triple(0.12f, 0.18f, 0.9f), Triple(0.21f, 0.46f, 0.5f), Triple(0.27f, 0.13f, 0.7f),
+    Triple(0.33f, 0.58f, 0.4f), Triple(0.40f, 0.20f, 0.8f), Triple(0.47f, 0.42f, 0.5f),
+    Triple(0.52f, 0.15f, 0.9f), Triple(0.58f, 0.55f, 0.6f), Triple(0.63f, 0.25f, 0.4f),
+    Triple(0.68f, 0.47f, 0.8f), Triple(0.73f, 0.16f, 0.6f), Triple(0.78f, 0.36f, 0.5f),
+    Triple(0.84f, 0.55f, 0.7f), Triple(0.88f, 0.22f, 0.9f), Triple(0.16f, 0.64f, 0.5f),
+    Triple(0.60f, 0.68f, 0.45f), Triple(0.30f, 0.34f, 0.55f), Triple(0.75f, 0.65f, 0.5f),
+)
+
+private fun DrawScope.drawBackdrop() {
+    val w = size.width
+    val h = size.height
+    // Shimmering vertical light streaks falling down the backdrop.
+    val streaks = listOf(0.16f, 0.27f, 0.41f, 0.55f, 0.68f, 0.80f, 0.88f)
+    streaks.forEachIndexed { i, fx ->
+        val sw = w * (0.008f + 0.005f * (i % 3))
+        drawRect(
+            brush = Brush.verticalGradient(
+                listOf(Color.White.copy(alpha = 0f), Color.White.copy(alpha = 0.07f), Color.White.copy(alpha = 0f)),
+                startY = h * 0.10f,
+                endY = h * 0.78f,
+            ),
+            topLeft = Offset(w * fx, h * 0.10f),
+            size = Size(sw, h * 0.68f),
+        )
+    }
+    // Twinkling stars.
+    for ((fx, fy, s) in STAGE_STARS) {
+        drawCircle(
+            color = Color(0xFFEFE3FF).copy(alpha = 0.12f + 0.28f * s),
+            radius = w * 0.0035f * (0.6f + s),
+            center = Offset(w * fx, h * fy),
+        )
+    }
+}
+
+private fun DrawScope.drawFloor(hatCx: Float) {
+    val w = size.width
+    val h = size.height
+    val top = h * 0.80f
+    // Wooden stage boards.
+    drawRect(
+        brush = Brush.verticalGradient(listOf(Color(0xFF454D63), Color(0xFF2A3040)), startY = top, endY = h),
+        topLeft = Offset(0f, top),
+        size = Size(w, h - top),
+    )
+    // Bright stage edge where the boards meet the backdrop.
+    drawRect(Color(0xFF5A6480), topLeft = Offset(0f, top), size = Size(w, h * 0.008f))
+    // Horizontal plank seams.
+    for (fy in listOf(0.865f, 0.93f)) {
+        drawRect(Color.Black.copy(alpha = 0.18f), topLeft = Offset(0f, h * fy), size = Size(w, h * 0.004f))
+    }
+    // Staggered vertical board joints (x fraction to plank row).
+    val rowTops = floatArrayOf(0.80f, 0.865f, 0.93f)
+    val rowBots = floatArrayOf(0.865f, 0.93f, 1f)
+    val joints = listOf(0.14f to 0, 0.46f to 0, 0.78f to 0, 0.30f to 1, 0.62f to 1, 0.90f to 1, 0.10f to 2, 0.38f to 2, 0.70f to 2)
+    for ((fx, row) in joints) {
+        drawRect(
+            Color.Black.copy(alpha = 0.15f),
+            topLeft = Offset(w * fx, h * rowTops[row]),
+            size = Size(w * 0.0025f, h * (rowBots[row] - rowTops[row])),
+        )
+    }
+    // Soft spotlight pool under the hat.
+    drawOval(
+        Color.White.copy(alpha = 0.05f),
+        topLeft = Offset(hatCx - w * 0.30f, h * 0.85f),
+        size = Size(w * 0.60f, h * 0.14f),
+    )
+}
+
+private val CURTAIN = Color(0xFFA62644)
+private val CURTAIN_DARK = Color(0xFF7E1B33)
+private val CURTAIN_LIGHT = Color(0xFFC23B5E)
+private val CURTAIN_GOLD = Color(0xFFE9C46A)
+
 private fun DrawScope.drawCurtains() {
-    val curtain = Color(0xFF8E2434)
-    // top valance
-    drawRect(curtain, topLeft = Offset(0f, 0f), size = Size(size.width, size.height * 0.10f))
-    // side drapes
-    drawRect(curtain, topLeft = Offset(0f, 0f), size = Size(size.width * 0.08f, size.height))
-    drawRect(curtain, topLeft = Offset(size.width * 0.92f, 0f), size = Size(size.width * 0.08f, size.height))
+    drawSideDrape(rightSide = false)
+    drawSideDrape(rightSide = true)
+    drawValance()
+}
+
+private fun DrawScope.drawSideDrape(rightSide: Boolean) {
+    val w = size.width
+    val h = size.height
+    fun x(f: Float) = if (rightSide) w - f * w else f * w
+
+    // Drape gathered at the waist by a gold tie-back, flaring back out below it.
+    val drape = Path().apply {
+        moveTo(x(0f), 0f)
+        lineTo(x(0.115f), 0f)
+        quadraticTo(x(0.085f), h * 0.18f, x(0.062f), h * 0.34f)
+        quadraticTo(x(0.045f), h * 0.46f, x(0.048f), h * 0.54f)
+        quadraticTo(x(0.062f), h * 0.72f, x(0.115f), h * 0.86f)
+        quadraticTo(x(0.132f), h * 0.92f, x(0.125f), h * 0.97f)
+        quadraticTo(x(0.080f), h * 1.00f, x(0.040f), h * 0.975f)
+        quadraticTo(x(0.018f), h * 0.96f, x(0f), h * 0.975f)
+        close()
+    }
+    drawPath(drape, CURTAIN)
+    // Shadowed fabric folds following the gather.
+    for ((k, f) in listOf(0.030f, 0.058f, 0.088f).withIndex()) {
+        val fold = Path().apply {
+            moveTo(x(f), h * 0.01f)
+            quadraticTo(x(f * 0.78f), h * 0.30f, x(0.047f + k * 0.006f), h * 0.53f)
+            quadraticTo(x(0.058f + k * 0.014f), h * 0.74f, x(0.045f + k * 0.030f), h * 0.96f)
+        }
+        drawPath(fold, CURTAIN_DARK.copy(alpha = 0.5f), style = Stroke(width = w * 0.006f))
+    }
+    // Light catching the outer edge.
+    val sheen = Path().apply {
+        moveTo(x(0.012f), h * 0.04f)
+        quadraticTo(x(0.016f), h * 0.45f, x(0.010f), h * 0.90f)
+    }
+    drawPath(sheen, CURTAIN_LIGHT.copy(alpha = 0.55f), style = Stroke(width = w * 0.008f))
+    // Gold tie-back band at the waist.
+    val tieL = minOf(x(0.014f), x(0.082f))
+    drawRoundRect(
+        color = CURTAIN_GOLD,
+        topLeft = Offset(tieL, h * 0.50f),
+        size = Size(w * 0.068f, h * 0.055f),
+        cornerRadius = CornerRadius(w * 0.012f, w * 0.012f),
+    )
+    drawRoundRect(
+        color = Color(0xFFB98A2F),
+        topLeft = Offset(tieL, h * 0.50f),
+        size = Size(w * 0.068f, h * 0.055f),
+        cornerRadius = CornerRadius(w * 0.012f, w * 0.012f),
+        style = Stroke(width = w * 0.0025f),
+    )
+}
+
+private fun DrawScope.drawValance() {
+    val w = size.width
+    val h = size.height
+    val vh = h * 0.105f
+    val scallops = 9
+    val sw = w / scallops
+    val dip = h * 0.055f
+    // Scalloped pelmet across the top.
+    val valance = Path().apply {
+        moveTo(0f, 0f)
+        lineTo(w, 0f)
+        lineTo(w, vh)
+        for (i in scallops - 1 downTo 0) {
+            quadraticTo(sw * (i + 0.5f), vh + dip, sw * i, vh)
+        }
+        close()
+    }
+    drawPath(valance, CURTAIN)
+    // Darker gathers where the scallops meet.
+    for (i in 1 until scallops) {
+        val cx = sw * i
+        val gather = Path().apply {
+            moveTo(cx - sw * 0.16f, 0f)
+            lineTo(cx + sw * 0.16f, 0f)
+            lineTo(cx, vh)
+            close()
+        }
+        drawPath(gather, CURTAIN_DARK.copy(alpha = 0.5f))
+    }
+    // Gold trim tracing the scallops.
+    val trim = Path().apply {
+        moveTo(0f, vh)
+        for (i in 0 until scallops) {
+            quadraticTo(sw * (i + 0.5f), vh + dip, sw * (i + 1f), vh)
+        }
+    }
+    drawPath(trim, CURTAIN_GOLD, style = Stroke(width = h * 0.009f))
+    // Dark rail along the very top.
+    drawRect(CURTAIN_DARK, topLeft = Offset(0f, 0f), size = Size(w, h * 0.018f))
 }
 
 private fun DrawScope.drawHat(l: HatLayout) {
+    val bodyLight = Color(0xFF9355BE)
     val body = Color(0xFF7B3FA0)
     val bodyDark = Color(0xFF5E2C7E)
-    val band = Color(0xFFFFD23F)
-    val stand = Color(0xFF2BB6A8)
-    val hole = Color(0xFF1E0F33)
+    val outline = Color(0xFF3F1A57)
+    val hole = Color(0xFF14081F)
+    val strokeW = size.minDimension * 0.006f
 
-    // Little stand the up-turned crown balances on.
+    // Teal pedestal the up-turned crown balances on (a squat cylinder).
+    val pedRx = l.bodyBotHalf * 1.5f
+    val pedRy = l.brimH * 0.42f
+    val pedTopCy = l.bodyBottomY + l.brimH * 0.05f
+    val pedH = l.brimH * 0.55f
     drawOval(
-        color = stand,
-        topLeft = Offset(l.cx - l.bodyBotHalf * 1.5f, l.bodyBottomY - l.brimH * 0.15f),
-        size = Size(l.bodyBotHalf * 3f, l.brimH * 0.8f),
+        color = Color(0xFF1F8478),
+        topLeft = Offset(l.cx - pedRx, pedTopCy + pedH - pedRy),
+        size = Size(pedRx * 2f, pedRy * 2f),
+    )
+    drawRect(
+        color = Color(0xFF2BA797),
+        topLeft = Offset(l.cx - pedRx, pedTopCy),
+        size = Size(pedRx * 2f, pedH),
+    )
+    drawOval(
+        color = Color(0xFF3BC9B8),
+        topLeft = Offset(l.cx - pedRx, pedTopCy - pedRy),
+        size = Size(pedRx * 2f, pedRy * 2f),
+    )
+    drawOval(
+        color = Color(0xFF1B7C70),
+        topLeft = Offset(l.cx - pedRx, pedTopCy - pedRy),
+        size = Size(pedRx * 2f, pedRy * 2f),
+        style = Stroke(width = strokeW * 0.8f),
     )
 
-    // Brim disc at the top (drawn behind the body so only the wings show).
-    drawOval(
-        color = bodyDark,
-        topLeft = Offset(l.cx - l.brimW / 2f, l.bodyTopY - l.brimH / 2f),
-        size = Size(l.brimW, l.brimH),
-    )
-
-    // Body (trapezoid): wide at the top, narrowing to the crown.
+    // Body: gently bowed sides, side-lit from the left.
+    val midY = (l.bodyTopY + l.bodyBottomY) / 2f
+    val ctrlHalf = (l.bodyTopHalf + l.bodyBotHalf) * 0.485f
     val bodyPath = Path().apply {
         moveTo(l.cx - l.bodyTopHalf, l.bodyTopY)
-        lineTo(l.cx + l.bodyTopHalf, l.bodyTopY)
+        quadraticTo(l.cx - ctrlHalf, midY, l.cx - l.bodyBotHalf, l.bodyBottomY)
         lineTo(l.cx + l.bodyBotHalf, l.bodyBottomY)
-        lineTo(l.cx - l.bodyBotHalf, l.bodyBottomY)
+        quadraticTo(l.cx + ctrlHalf, midY, l.cx + l.bodyTopHalf, l.bodyTopY)
         close()
     }
-    drawPath(bodyPath, color = body)
+    drawPath(
+        bodyPath,
+        brush = Brush.horizontalGradient(
+            listOf(bodyLight, body, bodyDark),
+            startX = l.cx - l.bodyTopHalf,
+            endX = l.cx + l.bodyTopHalf,
+        ),
+    )
 
     // Rounded closed crown at the bottom.
     drawOval(
@@ -255,14 +460,30 @@ private fun DrawScope.drawHat(l: HatLayout) {
         topLeft = Offset(l.cx - l.bodyBotHalf, l.bodyBottomY - l.brimH * 0.45f),
         size = Size(l.bodyBotHalf * 2f, l.brimH * 0.9f),
     )
+    drawPath(bodyPath, outline, style = Stroke(width = strokeW))
 
-    // Hat band near the mouth (width follows the body taper).
-    val bandF = (l.bandY - l.bodyTopY) / (l.bodyBottomY - l.bodyTopY)
-    val bandHalf = l.bodyTopHalf + (l.bodyBotHalf - l.bodyTopHalf) * bandF
-    drawRect(
-        color = band,
-        topLeft = Offset(l.cx - bandHalf, l.bandY),
-        size = Size(bandHalf * 2f, l.bandH),
+    // Soft sheen down the lit side of the felt.
+    val sheen = Path().apply {
+        moveTo(l.cx - l.bodyTopHalf * 0.72f, l.bodyTopY + l.brimH * 0.9f)
+        quadraticTo(l.cx - ctrlHalf * 0.78f, midY, l.cx - l.bodyBotHalf * 0.72f, l.bodyBottomY - l.brimH * 0.6f)
+    }
+    drawPath(sheen, Color.White.copy(alpha = 0.10f), style = Stroke(width = l.bodyTopHalf * 0.10f, cap = StrokeCap.Round))
+
+    // Brim disc at the top.
+    drawOval(
+        brush = Brush.verticalGradient(
+            listOf(Color(0xFF8F4FBC), bodyDark),
+            startY = l.bodyTopY - l.brimH / 2f,
+            endY = l.bodyTopY + l.brimH / 2f,
+        ),
+        topLeft = Offset(l.cx - l.brimW / 2f, l.bodyTopY - l.brimH / 2f),
+        size = Size(l.brimW, l.brimH),
+    )
+    drawOval(
+        color = outline,
+        topLeft = Offset(l.cx - l.brimW / 2f, l.bodyTopY - l.brimH / 2f),
+        size = Size(l.brimW, l.brimH),
+        style = Stroke(width = strokeW),
     )
 
     // The mouth (the hole the shapes come from), on top of everything.
@@ -273,7 +494,7 @@ private fun DrawScope.drawHat(l: HatLayout) {
     )
     // Soft inner-rim highlight for depth.
     drawOval(
-        color = Color.White.copy(alpha = 0.06f),
+        color = Color.White.copy(alpha = 0.08f),
         topLeft = Offset(l.cx - l.openingW / 2f, l.openingCenter.y - l.openingH * 0.62f),
         size = Size(l.openingW, l.openingH * 0.6f),
     )
@@ -283,13 +504,17 @@ private fun DrawScope.drawWand(opening: Offset, scale: Float, progress: Float) {
     // Gentle back-and-forth sweep just above the hole (~1.5 waves).
     val sweep = sin(progress * PI.toFloat() * 3f)
     val span = scale * 0.42f
-    val tip = Offset(opening.x + sweep * span, opening.y - scale * 0.22f)
-    // Handle trails down to the lower-right, toward the unseen magician.
-    val handleEnd = Offset(tip.x + scale * 0.55f, tip.y + scale * 0.95f)
+    val tip = Offset(opening.x + sweep * span, opening.y - scale * 0.10f)
+    // Handle trails up to the top-right, toward the unseen magician.
+    val handleEnd = Offset(tip.x + scale * 0.62f, tip.y - scale * 0.95f)
 
-    // Stick (dark core + lighter highlight).
-    drawLine(Color(0xFF3A220E), handleEnd, tip, strokeWidth = scale * 0.05f)
-    drawLine(Color(0xFF6B4A24), handleEnd, tip, strokeWidth = scale * 0.022f)
+    // Classic magician's wand: black stick, white tip cap.
+    drawLine(Color(0xFF17151D), handleEnd, tip, strokeWidth = scale * 0.05f, cap = StrokeCap.Round)
+    val capEnd = Offset(
+        tip.x + (handleEnd.x - tip.x) * 0.22f,
+        tip.y + (handleEnd.y - tip.y) * 0.22f,
+    )
+    drawLine(Color(0xFFF2EFE6), tip, capEnd, strokeWidth = scale * 0.05f, cap = StrokeCap.Round)
 
     // Glowing star tip.
     val tipR = scale * 0.12f
