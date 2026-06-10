@@ -4,6 +4,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
 
 /** Games that can be launched from the island menu. */
 enum class GameId {
@@ -66,17 +67,31 @@ private fun DrawScope.drawMiniHat() {
     val w = size.width
     val h = size.height
     val cx = w / 2f
+    val outline = Color(0xFF3F1A57)
+    val stroke = w * 0.035f
     // body
     drawRect(
-        Color(0xFF7B3FA0),
+        Color(0xFF8F4FBC),
         topLeft = Offset(cx - w * 0.20f, h * 0.28f),
         size = Size(w * 0.40f, h * 0.42f),
+    )
+    drawRect(
+        outline,
+        topLeft = Offset(cx - w * 0.20f, h * 0.28f),
+        size = Size(w * 0.40f, h * 0.42f),
+        style = Stroke(width = stroke),
     )
     // brim
     drawOval(
         Color(0xFF5E2C7E),
         topLeft = Offset(cx - w * 0.34f, h * 0.62f),
         size = Size(w * 0.68f, h * 0.16f),
+    )
+    drawOval(
+        outline,
+        topLeft = Offset(cx - w * 0.34f, h * 0.62f),
+        size = Size(w * 0.68f, h * 0.16f),
+        style = Stroke(width = stroke),
     )
     // band
     drawRect(
@@ -119,5 +134,7 @@ private fun DrawScope.drawMiniDiamond(c: Color) {
         lineTo(cx - r, cy)
         close()
     }
-    drawPath(path, c)
+    // White gem with a darker facet of the pad's own color, so it reads on the pad.
+    drawPath(path, Color.White.copy(alpha = 0.92f))
+    drawPath(path, Color(c.red * 0.55f, c.green * 0.55f, c.blue * 0.55f), style = Stroke(width = w * 0.035f))
 }
