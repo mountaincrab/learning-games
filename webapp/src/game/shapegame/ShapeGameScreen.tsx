@@ -4,93 +4,12 @@ import { useGameCanvas } from '../../useGameCanvas'
 import BackButton from '../../ui/components/BackButton'
 import { createGameAudio } from './GameAudio'
 import { drawFilled, drawOutline } from './ShapeRenderer'
-import { ShapeGameState, TRAY_SIZE } from './ShapeGameState'
-import { SHAPE_FILL_COLOR } from './ShapeType'
+import { computeHatLayout, HatLayout, ShapeGameState, shapeFillColorCss, TRAY_SIZE } from '../../shared'
 
-/** Geometry for the upside-down hat, the shape outlines and the piece tray,
- * computed once from the stage size (px). The hat's mouth (the hole the shapes
- * come from) sits at the top; the closed crown points down. */
-interface HatLayout {
-  cx: number
-  openingCenter: { x: number; y: number }
-  openingW: number
-  openingH: number
-  brimW: number
-  brimH: number
-  bodyTopY: number
-  bodyBottomY: number
-  bodyTopHalf: number
-  bodyBotHalf: number
-  bandY: number
-  bandH: number
-  slotCenters: { x: number; y: number }[]
-  slotSize: number
-  trayHomes: { x: number; y: number }[]
-  pieceSize: number
-  wandScale: number
-}
+// HatLayout/computeHatLayout/ShapeGameState come from the shared Kotlin module —
+// the exact code the Android app runs.
 
-const GRID_ROWS = 4
-const GRID_COLS = 3
 const WAND_DURATION_MS = 1300
-
-function computeHatLayout(w: number, h: number): HatLayout {
-  const cx = w * 0.34
-  const m = Math.min(w, h)
-  const slotSize = m * 0.1
-  const pieceSize = m * 0.12
-
-  // Upside-down hat: wide mouth at the top, narrowing to the closed crown below.
-  const bodyTopY = h * 0.22
-  const bodyBottomY = h * 0.86
-  const bodyTopHalf = w * 0.21
-  const bodyBotHalf = w * 0.165
-
-  // 4x3 grid of outlines, kept inside the narrowest (bottom) part of the body.
-  const gridTop = h * 0.34
-  const gridBottom = h * 0.78
-  const gridHalf = bodyBotHalf * 0.74
-  const centers: { x: number; y: number }[] = []
-  for (let i = 0; i < GRID_ROWS * GRID_COLS; i++) {
-    const r = Math.floor(i / GRID_COLS)
-    const c = i % GRID_COLS
-    const fx = c / (GRID_COLS - 1)
-    const fy = r / (GRID_ROWS - 1)
-    centers.push({
-      x: cx - gridHalf + gridHalf * 2 * fx,
-      y: gridTop + (gridBottom - gridTop) * fy,
-    })
-  }
-
-  // Tray: three pieces stacked vertically on the right, centred.
-  const trayX = w * 0.86
-  const gap = pieceSize * 1.55
-  const firstCy = h * 0.5 - gap
-  const homes = Array.from({ length: TRAY_SIZE }, (_, i) => ({
-    x: trayX - pieceSize / 2,
-    y: firstCy + gap * i - pieceSize / 2,
-  }))
-
-  return {
-    cx,
-    openingCenter: { x: cx, y: bodyTopY },
-    openingW: bodyTopHalf * 2 * 0.86,
-    openingH: h * 0.07,
-    brimW: bodyTopHalf * 2 * 1.25,
-    brimH: h * 0.085,
-    bodyTopY,
-    bodyBottomY,
-    bodyTopHalf,
-    bodyBotHalf,
-    bandY: bodyTopY + (bodyBottomY - bodyTopY) * 0.14,
-    bandH: h * 0.05,
-    slotCenters: centers,
-    slotSize,
-    trayHomes: homes,
-    pieceSize,
-    wandScale: Math.min(h * 0.45, w * 0.22),
-  }
-}
 
 /** Per-tray-slot animation state for the draggable piece living there. */
 interface PieceAnim {
@@ -185,9 +104,9 @@ export default function ShapeGameScreen({ onBack }: { onBack: () => void }) {
       ctx.save()
       ctx.translate(center.x - s / 2, center.y - s / 2)
       if (state.isFilled(slot.id)) {
-        drawFilled(ctx, slot.type, s, SHAPE_FILL_COLOR[slot.type])
+        drawFilled(ctx, slot.typeName, s, shapeFillColorCss(slot.typeName))
       } else {
-        drawOutline(ctx, slot.type, s, 'rgba(255,255,255,0.85)', s * 0.045)
+        drawOutline(ctx, slot.typeName, s, 'rgba(255,255,255,0.85)', s * 0.045)
       }
       ctx.restore()
     })
@@ -205,7 +124,7 @@ export default function ShapeGameScreen({ onBack }: { onBack: () => void }) {
       ctx.translate(anim.x.value + s / 2, anim.y.value + s / 2)
       ctx.scale(anim.pop.value, anim.pop.value)
       ctx.translate(-s / 2, -s / 2)
-      drawFilled(ctx, piece.type, s, SHAPE_FILL_COLOR[piece.type])
+      drawFilled(ctx, piece.typeName, s, shapeFillColorCss(piece.typeName))
       ctx.restore()
     })
   })

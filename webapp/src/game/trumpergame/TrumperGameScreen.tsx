@@ -3,39 +3,22 @@ import { DampingRatio, Spring, Stiffness } from '../../anim'
 import { useGameCanvas } from '../../useGameCanvas'
 import BackButton from '../../ui/components/BackButton'
 import { createTrumperAudio } from './TrumperAudio'
-import { TRUMPER_COUNT, TrumperGameState } from './TrumperGameState'
+import {
+  BLOAT_SCALE,
+  computeTrumperLayout,
+  TRUMPER_COUNT,
+  TrumperGameState,
+  trumperBodyCenter,
+  TrumperLayout,
+} from '../../shared'
 
-/** Per-character geometry, computed once from the stage size (px). `bases` are the
- * resting body centres (at scale 1); the feet stay planted while the tummy swells
- * upward. */
-interface TrumperLayout {
-  bases: { x: number; y: number }[]
-  bodyR: number
-  groundY: number
-}
+// TrumperLayout/computeTrumperLayout/trumperBodyCenter/TrumperGameState come from
+// the shared Kotlin module — the exact code the Android app runs.
 
-const BLOAT_SCALE = 1.7
 const GAS_DURATION_MS = 800
 
 /** Distinct, friendly body colours for the four characters. */
 const BODY_COLORS = ['#FF8FAB', '#6FD3C2', '#FFC857', '#9D8DF1']
-
-function computeTrumperLayout(w: number, h: number): TrumperLayout {
-  const columnW = w / TRUMPER_COUNT
-  const bodyR = Math.min(columnW * 0.3, h * 0.18)
-  const groundY = h * 0.8
-  const bases = Array.from({ length: TRUMPER_COUNT }, (_, i) => ({
-    x: columnW * (i + 0.5),
-    y: groundY - bodyR,
-  }))
-  return { bases, bodyR, groundY }
-}
-
-/** Current drawn body centre for a character, given its swell scale; the feet stay
- * planted on the ground while the belly grows upward. */
-function bodyCenter(base: { x: number; y: number }, bodyR: number, scale: number) {
-  return { x: base.x, y: base.y + bodyR - bodyR * scale }
-}
 
 export default function TrumperGameScreen({ onBack }: { onBack: () => void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -92,7 +75,7 @@ export default function TrumperGameScreen({ onBack }: { onBack: () => void }) {
     drawGround(ctx, w, h, layout.groundY)
     for (let i = 0; i < layout.bases.length; i++) {
       const scale = bellyRef.current[i].value
-      const center = bodyCenter(layout.bases[i], layout.bodyR, scale)
+      const center = trumperBodyCenter(layout.bases[i], layout.bodyR, scale)
       // Gas puffs sit behind the character.
       const gas = gasRef.current[i]
       if (gas.active) {
@@ -110,7 +93,7 @@ export default function TrumperGameScreen({ onBack }: { onBack: () => void }) {
     const layout = layoutRef.current.layout
     for (let i = 0; i < layout.bases.length; i++) {
       if (!state.isBloated(i)) continue
-      const center = bodyCenter(layout.bases[i], layout.bodyR, bellyRef.current[i].value)
+      const center = trumperBodyCenter(layout.bases[i], layout.bodyR, bellyRef.current[i].value)
       const r = layout.bodyR * bellyRef.current[i].value
       if (Math.hypot(tap.x - center.x, tap.y - center.y) <= r * 1.1) {
         if (state.release(i)) {

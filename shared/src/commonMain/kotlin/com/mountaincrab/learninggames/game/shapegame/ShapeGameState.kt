@@ -1,37 +1,49 @@
 package com.mountaincrab.learninggames.game.shapegame
 
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
+import com.mountaincrab.learninggames.game.ObservableGameState
+import kotlin.js.JsExport
 import kotlin.random.Random
 
 /** A fixed shape outline on the hat. Each game uses one slot per [ShapeType] in a
  * randomised arrangement, so a dropped piece matches exactly one slot. */
-data class Slot(val id: Int, val type: ShapeType)
+@JsExport
+class Slot internal constructor(val id: Int, @JsExport.Ignore val type: ShapeType) {
+    /** The shape name, for the web side (enums aren't exportable). */
+    val typeName: String get() = type.name
+}
 
 /** A draggable piece sitting in the tray. [pieceId] is unique per spawn so the UI
  * can tell a freshly-popped piece from the one it replaced. */
-data class TrayPiece(val pieceId: Int, val type: ShapeType)
+@JsExport
+class TrayPiece internal constructor(val pieceId: Int, @JsExport.Ignore val type: ShapeType) {
+    /** The shape name, for the web side (enums aren't exportable). */
+    val typeName: String get() = type.name
+}
+
+/** The number of pieces offered at once ([ShapeGameState.TRAY_SIZE], re-exported
+ * top-level because companion objects don't export cleanly to JS). */
+@JsExport
+const val TRAY_SIZE = 3
 
 /**
- * In-memory state for the Magic Hat shape-matching game. Up to [TRAY_SIZE] pieces
- * are offered at once; dropping one on its matching, still-empty outline fills the
- * slot and a new piece pops out to take its place in the tray. The game is won when
- * every slot is filled.
- *
- * Created via `remember { ShapeGameState() }` — no persistence.
+ * In-memory state for the Magic Hat shape-matching game, shared by the Android app
+ * and the webapp. Up to [TRAY_SIZE] pieces are offered at once; dropping one on its
+ * matching, still-empty outline fills the slot and a new piece pops out to take its
+ * place in the tray. The game is won when every slot is filled. No persistence.
  */
-class ShapeGameState {
+@JsExport
+class ShapeGameState : ObservableGameState() {
     /** The twelve target outlines, shuffled fresh each game. */
-    var slots by mutableStateOf(generateSlots())
+    var slots: Array<Slot> = generateSlots()
         private set
 
-    var filledIds by mutableStateOf<Set<Int>>(emptySet())
+    @JsExport.Ignore
+    var filledIds: Set<Int> = emptySet()
         private set
 
     /** The tray: [TRAY_SIZE] entries, each a draggable piece or `null` once the
      * board is nearly full and there is nothing left to spawn. */
-    var tray by mutableStateOf<List<TrayPiece?>>(List(TRAY_SIZE) { null })
+    var tray: Array<TrayPiece?> = arrayOfNulls(TRAY_SIZE)
         private set
 
     private var nextPieceId = 0
@@ -57,7 +69,8 @@ class ShapeGameState {
         val slot = slots.firstOrNull { it.id == slotId } ?: return false
         if (slot.type != piece.type) return false
         filledIds = filledIds + slot.id
-        tray = tray.toMutableList().also { it[idx] = null }
+        tray = tray.copyOf().also { it[idx] = null }
+        notifyChanged()
         return true
     }
 
@@ -73,7 +86,7 @@ class ShapeGameState {
         tray.filterNotNull().forEach { p ->
             available[p.type] = (available[p.type] ?: 0) - 1
         }
-        val next = tray.toMutableList()
+        val next = tray.copyOf()
         for (i in next.indices) {
             if (next[i] != null) continue
             val choices = available.filter { it.value > 0 }.keys.toList()
@@ -83,20 +96,22 @@ class ShapeGameState {
             available[type] = (available[type] ?: 1) - 1
         }
         tray = next
+        notifyChanged()
     }
 
     fun reset() {
         slots = generateSlots()
         filledIds = emptySet()
-        tray = List(TRAY_SIZE) { null }
+        tray = arrayOfNulls(TRAY_SIZE)
         refillTray()
     }
 
+    @JsExport.Ignore
     companion object {
         const val TRAY_SIZE = 3
 
         /** One slot per shape, in a randomised order. */
-        fun generateSlots(): List<Slot> =
-            ShapeType.values().toList().shuffled().mapIndexed { i, type -> Slot(i, type) }
+        fun generateSlots(): Array<Slot> =
+            ShapeType.entries.shuffled().mapIndexed { i, type -> Slot(i, type) }.toTypedArray()
     }
 }

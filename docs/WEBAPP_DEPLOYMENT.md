@@ -47,12 +47,21 @@ the one-time steps below create it and link it to this repo.
 From the repo root:
 
 ```bash
+./gradlew :shared:jsBrowserProductionLibraryDistribution   # build the shared Kotlin→JS library
 cd webapp
-npm install        # first time only
+npm install        # first time only (after the gradle step above)
 npm run build      # type-checks then builds to webapp/dist
 cd ..
 firebase deploy --only hosting
 ```
+
+The gradle step compiles the `shared/` Kotlin module (game state, layout and
+shape geometry — the same code the Android app uses) to a JS library that the
+webapp consumes as the npm package `learning-games-shared` (a `file:`
+dependency on `shared/build/dist/js/productionLibrary`). Re-run it (or
+`npm run build:shared` from `webapp/`) whenever the shared Kotlin changes; the
+`file:` dependency is a symlink, so no `npm install` is needed after the first
+time. It needs a JDK and Node on the machine.
 
 The CLI prints the Hosting URL (`https://<project-id>.web.app`) when it
 finishes. That's it — the site is live.
@@ -80,9 +89,15 @@ If you'd like pushes to `main` to deploy automatically:
    (`FIREBASE_SERVICE_ACCOUNT_<PROJECT_ID>`), and generates workflow files
    under `.github/workflows/`.
 
-2. In the generated workflow, set the build steps to:
+2. In the generated workflow, set the build steps to (the JDK is needed for
+   the shared Kotlin→JS library):
 
    ```yaml
+   - uses: actions/setup-java@v4
+     with:
+       java-version: "17"
+       distribution: "temurin"
+   - run: ./gradlew :shared:jsBrowserProductionLibraryDistribution
    - run: npm ci && npm run build
      working-directory: webapp
    ```
