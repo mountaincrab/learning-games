@@ -39,13 +39,24 @@ import kotlin.random.Random
 // TrumperLayout/computeTrumperLayout/BLOAT_SCALE/trumperBodyCenter live in the
 // `shared` module (same package), so the geometry is identical to the webapp's.
 
-/** Distinct, friendly body colours for the four characters. */
-private val BODY_COLORS = listOf(
-    Color(0xFFFF8FAB), // pink
-    Color(0xFF6FD3C2), // teal
-    Color(0xFFFFC857), // yellow
-    Color(0xFF9D8DF1), // purple
+/** A friendly look for each character: shirt colour, skin tone, hair colour/style and
+ * shoe colour. [hairStyle]: 0 = short spiky, 1 = pigtails, 2 = afro, 3 = top bun. */
+private data class TrumperLook(
+    val shirt: Color,
+    val skin: Color,
+    val hair: Color,
+    val shoe: Color,
+    val hairStyle: Int,
 )
+
+private val LOOKS = listOf(
+    TrumperLook(Color(0xFFFF8FAB), Color(0xFFC68642), Color(0xFF2B2B2B), Color(0xFF3A2412), hairStyle = 0),
+    TrumperLook(Color(0xFF6FD3C2), Color(0xFFFFDBAC), Color(0xFFFF7F50), Color(0xFF5C4033), hairStyle = 1),
+    TrumperLook(Color(0xFFFFC857), Color(0xFF8D5524), Color(0xFF1A1A1A), Color(0xFF2B2B2B), hairStyle = 2),
+    TrumperLook(Color(0xFF9D8DF1), Color(0xFFF1C27D), Color(0xFFF4D35E), Color(0xFF6B4F2A), hairStyle = 3),
+)
+
+private val PANTS_COLOR = Color(0xFF4A6FA5)
 
 @Composable
 fun TrumperGameScreen(onBack: () -> Unit) {
@@ -119,6 +130,7 @@ fun TrumperGameScreen(onBack: () -> Unit) {
                     }
                 }
         ) {
+            drawSky(layout.groundY)
             drawGround(layout.groundY)
             for (i in layout.bases.indices) {
                 val scale = bellyScale[i].value
@@ -127,7 +139,7 @@ fun TrumperGameScreen(onBack: () -> Unit) {
                 if (gas[i].value > 0f && gas[i].value < 1f) {
                     drawGas(center, layout.bodyR, gas[i].value)
                 }
-                drawTrumper(center, layout.bodyR, scale, BODY_COLORS[i])
+                drawTrumper(center, layout.bodyR, scale, LOOKS[i])
             }
         }
 
@@ -140,55 +152,160 @@ fun TrumperGameScreen(onBack: () -> Unit) {
 
 // --- Canvas drawing helpers ---------------------------------------------------
 
+/** Sun, drifting clouds and rolling hills behind the ground. */
+private fun DrawScope.drawSky(groundY: Float) {
+    val w = size.width
+    val h = size.height
+
+    // Sun with a soft glow, top-right corner.
+    val sun = Offset(w * 0.86f, h * 0.16f)
+    drawCircle(Color(0xFFFFF3B0).copy(alpha = 0.35f), w * 0.10f, sun)
+    drawCircle(Color(0xFFFFF3B0).copy(alpha = 0.55f), w * 0.065f, sun)
+    drawCircle(Color(0xFFFFE066), w * 0.045f, sun)
+
+    // Drifting clouds.
+    drawCloud(Offset(w * 0.18f, h * 0.16f), w * 0.075f)
+    drawCloud(Offset(w * 0.46f, h * 0.10f), w * 0.06f)
+    drawCloud(Offset(w * 0.68f, h * 0.30f), w * 0.05f)
+
+    // Rolling hills, partially covered by the ground drawn afterwards.
+    drawOval(
+        color = Color(0xFFA0D8C4),
+        topLeft = Offset(-w * 0.10f, groundY - h * 0.12f),
+        size = Size(w * 0.65f, h * 0.22f),
+    )
+    drawOval(
+        color = Color(0xFF8FCDB6),
+        topLeft = Offset(w * 0.45f, groundY - h * 0.16f),
+        size = Size(w * 0.75f, h * 0.26f),
+    )
+}
+
+private fun DrawScope.drawCloud(center: Offset, r: Float) {
+    val c = Color.White.copy(alpha = 0.85f)
+    drawCircle(c, r, Offset(center.x - r * 0.9f, center.y))
+    drawCircle(c, r * 1.2f, center)
+    drawCircle(c, r * 0.85f, Offset(center.x + r * 1.0f, center.y + r * 0.1f))
+    drawOval(c, topLeft = Offset(center.x - r * 1.6f, center.y), size = Size(r * 3.2f, r * 0.9f))
+}
+
 private fun DrawScope.drawGround(groundY: Float) {
+    val w = size.width
+    val h = size.height
     drawRect(
         color = Color(0xFF8AC926),
         topLeft = Offset(0f, groundY),
-        size = Size(size.width, size.height - groundY),
+        size = Size(w, h - groundY),
     )
     // soft grass line
     drawRect(
         color = Color(0xFF6FA31C),
         topLeft = Offset(0f, groundY),
-        size = Size(size.width, size.height * 0.012f),
+        size = Size(w, h * 0.012f),
     )
+
+    // Little flowers dotted along the grass.
+    val flowers = listOf(0.06f, 0.30f, 0.50f, 0.71f, 0.93f)
+    for ((k, fx) in flowers.withIndex()) {
+        val petal = if (k % 2 == 0) Color(0xFFFFB3C6) else Color(0xFFFFFFFF)
+        drawFlower(Offset(w * fx, groundY + h * 0.05f), w * 0.012f, petal)
+    }
+
+    // Tufts of grass.
+    val tufts = listOf(0.14f, 0.22f, 0.40f, 0.60f, 0.80f, 0.88f)
+    for (fx in tufts) {
+        drawGrassTuft(Offset(w * fx, groundY), w * 0.018f)
+    }
 }
 
-/** One little round character: planted legs, a swelling belly-body, arms, head and a
- * face that strains (reddens, mouth opens) as the tummy [scale] grows. */
-private fun DrawScope.drawTrumper(center: Offset, bodyR: Float, scale: Float, color: Color) {
+private fun DrawScope.drawFlower(center: Offset, r: Float, petalColor: Color) {
+    for (sx in listOf(-1f, 0f, 1f)) {
+        for (sy in listOf(-1f, 0f, 1f)) {
+            if (sx == 0f && sy == 0f) continue
+            if (sx != 0f && sy != 0f) continue
+            drawCircle(petalColor, r * 0.6f, Offset(center.x + sx * r, center.y + sy * r))
+        }
+    }
+    drawCircle(Color(0xFFFFD23F), r * 0.55f, center)
+}
+
+private fun DrawScope.drawGrassTuft(base: Offset, h: Float) {
+    val color = Color(0xFF6FA31C)
+    for (sx in listOf(-1f, 0f, 1f)) {
+        drawLine(
+            color = color,
+            start = Offset(base.x + sx * h * 0.3f, base.y + h * 0.15f),
+            end = Offset(base.x + sx * h * 0.55f, base.y - h * (0.7f - kotlin.math.abs(sx) * 0.2f)),
+            strokeWidth = h * 0.12f,
+            cap = androidx.compose.ui.graphics.StrokeCap.Round,
+        )
+    }
+}
+
+/** One little person: shadow, planted legs with shoes, shorts, a swelling shirt-belly,
+ * arms with hands, a head with hair and a face that strains (reddens, mouth opens) as
+ * the tummy [scale] grows. */
+private fun DrawScope.drawTrumper(center: Offset, bodyR: Float, scale: Float, look: TrumperLook) {
     val r = bodyR * scale
     val feetY = center.y + r
     // strain 0..1 — how bloated this character looks right now
     val strain = ((scale - 1f) / (BLOAT_SCALE - 1f)).coerceIn(0f, 1f)
-    val bodyColor = lerp(color, Color(0xFFE85D5D), strain * 0.55f)
+    val bodyColor = lerp(look.shirt, Color(0xFFE85D5D), strain * 0.55f)
 
-    // Legs (planted on the ground, just under the body).
-    val legW = bodyR * 0.20f
+    // Ground shadow.
+    drawOval(
+        color = Color.Black.copy(alpha = 0.14f),
+        topLeft = Offset(center.x - bodyR * 0.65f, feetY + bodyR * 0.04f),
+        size = Size(bodyR * 1.3f, bodyR * 0.28f),
+    )
+
+    // Legs with shoes (planted on the ground, just under the body).
+    val legW = bodyR * 0.22f
     val legH = bodyR * 0.45f
-    val legColor = lerp(color, Color.Black, 0.25f)
     for (sx in listOf(-1f, 1f)) {
+        val legX = center.x + sx * bodyR * 0.45f
         drawRoundRectCompat(
-            color = legColor,
-            topLeft = Offset(center.x + sx * bodyR * 0.45f - legW / 2f, feetY - legH * 0.4f),
-            size = Size(legW, legH),
-            corner = legW / 2f,
+            color = PANTS_COLOR,
+            topLeft = Offset(legX - legW / 2f, feetY - legH * 0.4f),
+            size = Size(legW, legH * 0.55f),
+            corner = legW * 0.3f,
+        )
+        drawRoundRectCompat(
+            color = look.skin,
+            topLeft = Offset(legX - legW * 0.36f, feetY - legH * 0.05f),
+            size = Size(legW * 0.72f, legH * 0.20f),
+            corner = legW * 0.2f,
+        )
+        drawOval(
+            color = look.shoe,
+            topLeft = Offset(legX - legW * 0.65f, feetY - legH * 0.04f),
+            size = Size(legW * 1.3f, legH * 0.32f),
         )
     }
 
-    // Arms (lift out a little as the belly swells).
-    val armColor = lerp(color, Color.Black, 0.15f)
+    // Shorts peeking out below the shirt.
+    drawOval(
+        color = PANTS_COLOR,
+        topLeft = Offset(center.x - r * 0.62f, feetY - r * 0.55f),
+        size = Size(r * 1.24f, r * 0.55f),
+    )
+
+    // Arms with little hands (lift out a little as the belly swells).
+    val armColor = lerp(look.shirt, Color.Black, 0.15f)
     val armLift = strain * bodyR * 0.35f
     for (sx in listOf(-1f, 1f)) {
+        val handCenter = Offset(center.x + sx * r * 1.15f, center.y - armLift)
         drawLine(
             color = armColor,
             start = Offset(center.x + sx * r * 0.7f, center.y),
-            end = Offset(center.x + sx * r * 1.15f, center.y - armLift),
+            end = handCenter,
             strokeWidth = bodyR * 0.18f,
+            cap = androidx.compose.ui.graphics.StrokeCap.Round,
         )
+        drawCircle(look.skin, bodyR * 0.13f, handCenter)
     }
 
-    // Belly-body.
+    // Shirt-belly.
     drawCircle(color = bodyColor, radius = r, center = center)
     // soft belly highlight
     drawCircle(
@@ -196,11 +313,30 @@ private fun DrawScope.drawTrumper(center: Offset, bodyR: Float, scale: Float, co
         radius = r * 0.55f,
         center = Offset(center.x - r * 0.28f, center.y - r * 0.28f),
     )
+    // collar
+    val collar = Path().apply {
+        moveTo(center.x - r * 0.22f, center.y - r * 0.92f)
+        lineTo(center.x, center.y - r * 0.62f)
+        lineTo(center.x + r * 0.22f, center.y - r * 0.92f)
+        close()
+    }
+    drawPath(collar, Color.White.copy(alpha = 0.35f))
 
     // Head sitting on top of the belly.
     val headR = bodyR * 0.55f
     val headCenter = Offset(center.x, center.y - r - headR * 0.55f)
-    drawCircle(color = lerp(color, Color(0xFFE85D5D), strain * 0.4f), radius = headR, center = headCenter)
+
+    // Hair drawn behind the head for styles that frame the face (afro, pigtails).
+    if (look.hairStyle == 2 || look.hairStyle == 1) {
+        drawHairBack(headCenter, headR, look.hair, look.hairStyle)
+    }
+
+    drawCircle(color = look.skin, radius = headR, center = headCenter)
+
+    // Ears.
+    for (sx in listOf(-1f, 1f)) {
+        drawCircle(look.skin, headR * 0.13f, Offset(headCenter.x + sx * headR * 0.92f, headCenter.y + headR * 0.05f))
+    }
 
     // Eyes.
     val eyeDx = headR * 0.42f
@@ -209,6 +345,20 @@ private fun DrawScope.drawTrumper(center: Offset, bodyR: Float, scale: Float, co
     for (sx in listOf(-1f, 1f)) {
         drawCircle(Color.White, eyeR, Offset(headCenter.x + sx * eyeDx, eyeY))
         drawCircle(Color(0xFF2B2B2B), eyeR * 0.55f, Offset(headCenter.x + sx * eyeDx, eyeY))
+    }
+
+    // Eyebrows: neutral, but knit together a little as strain builds.
+    val browLift = strain * headR * 0.10f
+    for (sx in listOf(-1f, 1f)) {
+        val bx = headCenter.x + sx * eyeDx
+        val by = eyeY - headR * 0.32f + browLift
+        drawLine(
+            color = look.hair,
+            start = Offset(bx - eyeR * 0.9f, by + sx * browLift * 0.6f),
+            end = Offset(bx + eyeR * 0.9f, by - sx * browLift * 0.6f),
+            strokeWidth = headR * 0.07f,
+            cap = androidx.compose.ui.graphics.StrokeCap.Round,
+        )
     }
 
     // Mouth: a calm little smile that opens into a strained "O" as it bloats.
@@ -220,6 +370,11 @@ private fun DrawScope.drawTrumper(center: Offset, bodyR: Float, scale: Float, co
         topLeft = Offset(mouthC.x - mouthW, mouthC.y - mouthH),
         size = Size(mouthW * 2f, mouthH * 2f),
     )
+
+    // Hair drawn on top of/around the head for styles that sit above it.
+    if (look.hairStyle == 0 || look.hairStyle == 3) {
+        drawHairFront(headCenter, headR, look.hair, look.hairStyle)
+    }
 
     // Straining extras: blush cheeks + a sweat drop.
     if (strain > 0.35f) {
@@ -233,6 +388,52 @@ private fun DrawScope.drawTrumper(center: Offset, bodyR: Float, scale: Float, co
             radius = headR * 0.12f,
             center = Offset(headCenter.x + headR * 0.85f, headCenter.y - headR * 0.5f),
         )
+    }
+}
+
+/** Hair that frames the face from behind: a big afro puff (style 2) or pigtail
+ * bunches either side of the head (style 1). */
+private fun DrawScope.drawHairBack(headCenter: Offset, headR: Float, color: Color, style: Int) {
+    when (style) {
+        2 -> drawCircle(color, headR * 1.12f, Offset(headCenter.x, headCenter.y - headR * 0.05f))
+        1 -> {
+            for (sx in listOf(-1f, 1f)) {
+                drawCircle(color, headR * 0.40f, Offset(headCenter.x + sx * headR * 1.18f, headCenter.y + headR * 0.20f))
+            }
+        }
+    }
+}
+
+/** Hair that sits on top of the head: short spiky tufts (style 0) or a top-knot bun
+ * over a hairline cap (style 3). */
+private fun DrawScope.drawHairFront(headCenter: Offset, headR: Float, color: Color, style: Int) {
+    when (style) {
+        0 -> {
+            for (sx in listOf(-2f, -1f, 0f, 1f, 2f)) {
+                val spike = Path().apply {
+                    val baseX = headCenter.x + sx * headR * 0.32f
+                    val baseY = headCenter.y - headR * 0.78f
+                    moveTo(baseX - headR * 0.16f, baseY)
+                    lineTo(baseX + headR * 0.16f, baseY)
+                    lineTo(baseX + sx * headR * 0.06f, baseY - headR * 0.42f)
+                    close()
+                }
+                drawPath(spike, color)
+            }
+        }
+        3 -> {
+            // hairline cap
+            drawArc(
+                color = color,
+                startAngle = 180f,
+                sweepAngle = 180f,
+                useCenter = true,
+                topLeft = Offset(headCenter.x - headR, headCenter.y - headR),
+                size = Size(headR * 2f, headR * 2f),
+            )
+            // top-knot bun
+            drawCircle(color, headR * 0.28f, Offset(headCenter.x, headCenter.y - headR * 1.05f))
+        }
     }
 }
 
