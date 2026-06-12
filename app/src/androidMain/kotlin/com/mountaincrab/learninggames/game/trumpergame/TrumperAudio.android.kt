@@ -42,6 +42,9 @@ private class AndroidTrumperAudio(context: Context) : TrumperAudio {
     /** Sample ids that have finished loading and are safe to play. */
     private val ready = mutableSetOf<Int>()
 
+    /** Fart sample ids (a tap plays a random one of these — never a name clip). */
+    private val fartIds = mutableSetOf<Int>()
+
     /** SoundPool sample id per character (column order), or 0 if its clip is absent. */
     private val nameIds = IntArray(NAME_FILES.size)
 
@@ -51,7 +54,7 @@ private class AndroidTrumperAudio(context: Context) : TrumperAudio {
         }
         for (i in 1..MAX_FARTS) {
             val res = rawId("fart_$i")
-            if (res != 0) soundPool.load(appContext, res, 1)
+            if (res != 0) fartIds += soundPool.load(appContext, res, 1)
         }
         NAME_FILES.forEachIndexed { i, file ->
             val res = rawId("name_$file")
@@ -60,7 +63,7 @@ private class AndroidTrumperAudio(context: Context) : TrumperAudio {
     }
 
     override fun playFart() {
-        val id = synchronized(ready) { ready.toList() }
+        val id = synchronized(ready) { fartIds.filter { it in ready } }
             .takeIf { it.isNotEmpty() }
             ?.let { it[Random.nextInt(it.size)] }
             ?: return
