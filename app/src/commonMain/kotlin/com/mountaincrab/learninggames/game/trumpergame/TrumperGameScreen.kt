@@ -1,6 +1,7 @@
 package com.mountaincrab.learninggames.game.trumpergame
 
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Easing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -12,9 +13,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -24,6 +28,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
@@ -58,6 +63,31 @@ private val LOOKS = listOf(
 
 private val PANTS_COLOR = Color(0xFF4A6FA5)
 
+// --- Opening sequence (each character pops out of its burrow shouting its name) ---
+// Audio clips are keyed by column order: 0 = Penny, 1 = Taz, 2 = Zach, 3 = Rory
+// (matching [LOOKS] and the `name_*.ogg` files in res/raw).
+
+/** A beat before the first pop — shows the burrows and lets the name clips finish
+ * loading so the very first shout isn't missed. */
+private const val INTRO_LEAD_MS = 600L
+
+/** Length of one character's pop-out jump. */
+private const val INTRO_JUMP_MS = 1300
+
+/** Delay between one character popping out and the next. */
+private const val INTRO_STAGGER_MS = 2000L
+
+/** How far below ground (×bodyR) a not-yet-emerged character is hidden. */
+private const val POP_DEPTH = 2.3f
+
+/** Overshoot ("back") ease-out: rises past the resting spot then settles — a little
+ * hop as the character lands out of the hole. */
+private val EaseOutBack = Easing { t ->
+    val s = 2.0f
+    val p = t - 1f
+    1f + (s + 1f) * p * p * p + s * p * p
+}
+
 @Composable
 fun TrumperGameScreen(onBack: () -> Unit) {
     val state = remember { TrumperGameState() }
@@ -82,6 +112,27 @@ fun TrumperGameScreen(onBack: () -> Unit) {
         val bellyScale = remember { List(TrumperGameState.COUNT) { Animatable(1f) } }
         val gas = remember { List(TrumperGameState.COUNT) { Animatable(0f) } }
 
+        // Opening sequence: every character starts hidden in its burrow (emerge 0) and
+        // pops out one by one (emerge → 1 with a hop), shouting its name as it appears.
+        val emerge = remember { List(TrumperGameState.COUNT) { Animatable(0f) } }
+        val holeAlpha = remember { Animatable(1f) }
+        var introDone by remember { mutableStateOf(false) }
+
+        LaunchedEffect(Unit) {
+            delay(INTRO_LEAD_MS)
+            for (i in 0 until TrumperGameState.COUNT) {
+                audio.playName(i)
+                launch { emerge[i].animateTo(1f, tween(INTRO_JUMP_MS, easing = EaseOutBack)) }
+                if (i < TrumperGameState.COUNT - 1) delay(INTRO_STAGGER_MS) else delay(INTRO_JUMP_MS.toLong())
+            }
+            introDone = true
+        }
+
+        // Once everyone is out, fade the burrows away, leaving the normal play scene.
+        LaunchedEffect(introDone) {
+            if (introDone) holeAlpha.animateTo(0f, tween(500))
+        }
+
         // Drive each belly toward its target: a slow bouncy swell, a quick shrink.
         for (i in 0 until TrumperGameState.COUNT) {
             val bloated = state.isBloated(i)
@@ -99,8 +150,10 @@ fun TrumperGameScreen(onBack: () -> Unit) {
             }
         }
 
-        // Bloat a random character at gentle random intervals.
-        LaunchedEffect(Unit) {
+        // Bloat a random character at gentle random intervals — only once the opening
+        // sequence has finished and everyone is standing in their row.
+        LaunchedEffect(introDone) {
+            if (!introDone) return@LaunchedEffect
             while (true) {
                 delay(900L + Random.nextLong(2200L))
                 state.bloatRandom()
@@ -112,6 +165,7 @@ fun TrumperGameScreen(onBack: () -> Unit) {
                 .fillMaxSize()
                 .pointerInput(layout) {
                     detectTapGestures { tap ->
+                        if (!introDone) return@detectTapGestures
                         for (i in layout.bases.indices) {
                             if (!state.isBloated(i)) continue
                             val center = trumperBodyCenter(layout.bases[i], layout.bodyR, bellyScale[i].value).toOffset()
@@ -132,14 +186,30 @@ fun TrumperGameScreen(onBack: () -> Unit) {
         ) {
             drawSky(layout.groundY)
             drawGround(layout.groundY)
+
+            // Burrows the characters pop out of (fade away after the opening).
+            if (holeAlpha.value > 0.01f) {
+                for (i in layout.bases.indices) {
+                    drawBurrow(layout.bases[i].x, layout.groundY, layout.bodyR, holeAlpha.value)
+                }
+            }
+
             for (i in layout.bases.indices) {
                 val scale = bellyScale[i].value
-                val center = trumperBodyCenter(layout.bases[i], layout.bodyR, scale).toOffset()
-                // Gas puffs sit behind the character.
-                if (gas[i].value > 0f && gas[i].value < 1f) {
-                    drawGas(center, layout.bodyR, gas[i].value)
+                val popPx = (1f - emerge[i].value) * POP_DEPTH * layout.bodyR
+                val center = trumperBodyCenter(layout.bases[i], layout.bodyR, scale).toOffset() + Offset(0f, popPx)
+                if (!introDone) {
+                    // Still popping out: clip away the part below ground (inside the hole).
+                    clipRect(0f, 0f, size.width, layout.groundY) {
+                        drawTrumper(center, layout.bodyR, scale, LOOKS[i])
+                    }
+                } else {
+                    // Gas puffs sit behind the character.
+                    if (gas[i].value > 0f && gas[i].value < 1f) {
+                        drawGas(center, layout.bodyR, gas[i].value)
+                    }
+                    drawTrumper(center, layout.bodyR, scale, LOOKS[i])
                 }
-                drawTrumper(center, layout.bodyR, scale, LOOKS[i])
             }
         }
 
@@ -240,6 +310,27 @@ private fun DrawScope.drawGrassTuft(base: Offset, h: Float) {
             cap = androidx.compose.ui.graphics.StrokeCap.Round,
         )
     }
+}
+
+/** A little dirt burrow opening straddling the ground line, that a character pops out
+ * of during the opening sequence. [alpha] fades the whole thing in/out. */
+private fun DrawScope.drawBurrow(cx: Float, groundY: Float, bodyR: Float, alpha: Float) {
+    val rimW = bodyR * 1.7f
+    val rimH = bodyR * 0.5f
+    // Mounded dirt rim sitting on the grass.
+    drawOval(
+        color = Color(0xFF7A5230).copy(alpha = alpha),
+        topLeft = Offset(cx - rimW / 2f, groundY - rimH * 0.55f),
+        size = Size(rimW, rimH),
+    )
+    // Dark opening the character rises out of.
+    val openW = rimW * 0.74f
+    val openH = rimH * 0.7f
+    drawOval(
+        color = Color(0xFF2A1B10).copy(alpha = alpha),
+        topLeft = Offset(cx - openW / 2f, groundY - openH * 0.5f),
+        size = Size(openW, openH),
+    )
 }
 
 /** One little person: shadow, planted legs with shoes, shorts, a swelling shirt-belly,
