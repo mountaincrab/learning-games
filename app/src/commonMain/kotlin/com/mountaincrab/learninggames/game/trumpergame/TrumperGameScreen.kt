@@ -2,7 +2,10 @@ package com.mountaincrab.learninggames.game.trumpergame
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Easing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
@@ -29,6 +32,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
@@ -37,6 +41,7 @@ import com.mountaincrab.learninggames.geometry.toOffset
 import com.mountaincrab.learninggames.ui.components.BackButton
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.random.Random
@@ -88,6 +93,51 @@ private val EaseOutBack = Easing { t ->
     1f + (s + 1f) * p * p * p + s * p * p
 }
 
+/** Anticipation ("back") ease-in: dips back before diving down — used as the
+ * characters hop back into their burrows at the end of a round. */
+private val EaseInBack = Easing { t ->
+    val s = 1.7f
+    t * t * ((s + 1f) * t - s)
+}
+
+// --- Round flow ---------------------------------------------------------------
+// A round runs Intro → Play → Celebrate → Outro → Replay, then loops back to Intro
+// when the child taps the play-again button.
+private enum class Phase { Intro, Play, Celebrate, Outro, Replay }
+
+/** How long the confetti-and-cheer celebration holds before the goodbye. */
+private const val CELEBRATE_MS = 2200L
+
+/** Length of one character's hop back down into its burrow. */
+private const val OUTRO_JUMP_MS = 700
+
+/** Delay between one character diving into its burrow and the next. */
+private const val OUTRO_STAGGER_MS = 320L
+
+/** How long the falling confetti animation runs (covers celebrate + goodbye). */
+private const val CONFETTI_MS = 4200
+
+/** Number of confetti pieces raining down during the celebration. */
+private const val CONFETTI_COUNT = 70
+
+private val CONFETTI_COLORS = listOf(
+    Color(0xFFFF6B6B), Color(0xFFFFD93D), Color(0xFF6BCB77),
+    Color(0xFF4D96FF), Color(0xFFB983FF), Color(0xFFFF9F45),
+)
+
+/** One falling confetti piece; its motion is computed analytically from elapsed time
+ * so it stays stable across recompositions. */
+private data class Confetti(
+    val x0: Float,
+    val color: Color,
+    val size: Float,
+    val speed: Float,
+    val driftAmp: Float,
+    val driftFreq: Float,
+    val phase: Float,
+    val rotSpeed: Float,
+)
+
 @Composable
 fun TrumperGameScreen(onBack: () -> Unit) {
     val state = remember { TrumperGameState() }
@@ -108,37 +158,100 @@ fun TrumperGameScreen(onBack: () -> Unit) {
         // Recompose whenever the shared (Compose-free) game state mutates.
         observeGameState(state)
 
-        // Per-character animation: belly swell scale, and a 0→1 gas-puff burst.
+        // Per-character animation: belly swell scale, a 0→1 gas-puff burst and a 0→1
+        // burrow-emerge (0 = hidden in the hole, 1 = fully standing).
         val bellyScale = remember { List(TrumperGameState.COUNT) { Animatable(1f) } }
         val gas = remember { List(TrumperGameState.COUNT) { Animatable(0f) } }
-
-        // Opening sequence: every character starts hidden in its burrow (emerge 0) and
-        // pops out one by one (emerge → 1 with a hop), shouting its name as it appears.
         val emerge = remember { List(TrumperGameState.COUNT) { Animatable(0f) } }
         val holeAlpha = remember { Animatable(1f) }
-        var introDone by remember { mutableStateOf(false) }
 
-        LaunchedEffect(Unit) {
-            delay(INTRO_LEAD_MS)
-            for (i in 0 until TrumperGameState.COUNT) {
-                audio.playName(i)
-                launch { emerge[i].animateTo(1f, tween(INTRO_JUMP_MS, easing = EaseOutBack)) }
-                if (i < TrumperGameState.COUNT - 1) delay(INTRO_STAGGER_MS) else delay(INTRO_JUMP_MS.toLong())
+        // Celebration animations: confetti progress (0→1 over CONFETTI_MS), a 0→1 blend
+        // that raises everyone's arms into a goodbye wave, and a gentle play-again pulse.
+        val confetti = remember { Animatable(0f) }
+        val wave = remember { Animatable(0f) }
+        val replayPulse = remember { Animatable(0f) }
+        val confettiPieces = remember(w, h) {
+            val rng = Random(42)
+            List(CONFETTI_COUNT) {
+                Confetti(
+                    x0 = rng.nextFloat() * w,
+                    color = CONFETTI_COLORS[rng.nextInt(CONFETTI_COLORS.size)],
+                    size = w * 0.008f + rng.nextFloat() * w * 0.012f,
+                    speed = h * 0.25f + rng.nextFloat() * h * 0.40f,
+                    driftAmp = w * 0.015f + rng.nextFloat() * w * 0.03f,
+                    driftFreq = 1.5f + rng.nextFloat() * 2.5f,
+                    phase = rng.nextFloat() * (2f * PI.toFloat()),
+                    rotSpeed = (rng.nextFloat() - 0.5f) * 12f,
+                )
             }
-            introDone = true
         }
 
-        // Once everyone is out, fade the burrows away, leaving the normal play scene.
-        LaunchedEffect(introDone) {
-            if (introDone) holeAlpha.animateTo(0f, tween(500))
+        var phase by remember { mutableStateOf(Phase.Intro) }
+
+        // Drive the whole round flow off the current phase.
+        LaunchedEffect(phase) {
+            when (phase) {
+                Phase.Intro -> {
+                    // Everyone starts hidden in a burrow; pop them out one by one,
+                    // shouting each name, then begin play.
+                    holeAlpha.snapTo(1f)
+                    wave.snapTo(0f)
+                    delay(INTRO_LEAD_MS)
+                    for (i in 0 until TrumperGameState.COUNT) {
+                        audio.playName(i)
+                        launch { emerge[i].animateTo(1f, tween(INTRO_JUMP_MS, easing = EaseOutBack)) }
+                        if (i < TrumperGameState.COUNT - 1) delay(INTRO_STAGGER_MS) else delay(INTRO_JUMP_MS.toLong())
+                    }
+                    holeAlpha.animateTo(0f, tween(500))
+                    phase = Phase.Play
+                }
+                Phase.Play -> {
+                    // Bloat a random character at gentle random intervals.
+                    while (true) {
+                        delay(900L + Random.nextLong(2200L))
+                        state.bloatRandom()
+                    }
+                }
+                Phase.Celebrate -> {
+                    // Confetti rains, everyone cheers and waves, then they say goodbye.
+                    // The confetti runs on the composition scope so it keeps falling
+                    // (and fades out) across the Outro/Replay phase changes below.
+                    audio.playCheer()
+                    scope.launch { confetti.snapTo(0f); confetti.animateTo(1f, tween(CONFETTI_MS, easing = LinearEasing)) }
+                    launch { wave.animateTo(1f, tween(400)) }
+                    delay(CELEBRATE_MS)
+                    phase = Phase.Outro
+                }
+                Phase.Outro -> {
+                    // Burrows fade back in and everyone hops down into them one by one.
+                    holeAlpha.animateTo(1f, tween(400))
+                    for (i in 0 until TrumperGameState.COUNT) {
+                        launch { emerge[i].animateTo(0f, tween(OUTRO_JUMP_MS, easing = EaseInBack)) }
+                        if (i < TrumperGameState.COUNT - 1) delay(OUTRO_STAGGER_MS) else delay(OUTRO_JUMP_MS.toLong())
+                    }
+                    wave.snapTo(0f)
+                    phase = Phase.Replay
+                }
+                Phase.Replay -> {
+                    // The confetti launched in Celebrate keeps fading out here; just
+                    // breathe the play-again button until the child taps it.
+                    replayPulse.animateTo(1f, infiniteRepeatable(tween(700), RepeatMode.Reverse))
+                }
+            }
         }
 
-        // Drive each belly toward its target: a slow bouncy swell, a quick shrink.
+        // When the goal is reached during play, kick off the celebration.
+        LaunchedEffect(state.isWon) {
+            if (state.isWon && phase == Phase.Play) phase = Phase.Celebrate
+        }
+
+        // Drive each belly toward its target: a bouncy swell while bloated in play, a
+        // quick shrink otherwise (so everyone deflates for the celebration).
         for (i in 0 until TrumperGameState.COUNT) {
-            val bloated = state.isBloated(i)
+            val swell = state.isBloated(i) && phase == Phase.Play
             key(i) {
-                LaunchedEffect(bloated) {
-                    if (bloated) {
+                LaunchedEffect(swell) {
+                    if (swell) {
                         bellyScale[i].animateTo(
                             BLOAT_SCALE,
                             spring(dampingRatio = Spring.DampingRatioLowBouncy, stiffness = Spring.StiffnessVeryLow),
@@ -150,36 +263,44 @@ fun TrumperGameScreen(onBack: () -> Unit) {
             }
         }
 
-        // Bloat a random character at gentle random intervals — only once the opening
-        // sequence has finished and everyone is standing in their row.
-        LaunchedEffect(introDone) {
-            if (!introDone) return@LaunchedEffect
-            while (true) {
-                delay(900L + Random.nextLong(2200L))
-                state.bloatRandom()
-            }
-        }
-
         Canvas(
             modifier = Modifier
                 .fillMaxSize()
-                .pointerInput(layout) {
+                .pointerInput(layout, phase) {
                     detectTapGestures { tap ->
-                        if (!introDone) return@detectTapGestures
-                        for (i in layout.bases.indices) {
-                            if (!state.isBloated(i)) continue
-                            val center = trumperBodyCenter(layout.bases[i], layout.bodyR, bellyScale[i].value).toOffset()
-                            val r = layout.bodyR * bellyScale[i].value
-                            if ((tap - center).getDistance() <= r * 1.1f) {
-                                if (state.release(i)) {
-                                    scope.launch {
-                                        audio.playFart()
-                                        gas[i].snapTo(0f)
-                                        gas[i].animateTo(1f, tween(800))
+                        when (phase) {
+                            Phase.Play -> {
+                                for (i in layout.bases.indices) {
+                                    if (!state.isBloated(i)) continue
+                                    val center = trumperBodyCenter(layout.bases[i], layout.bodyR, bellyScale[i].value).toOffset()
+                                    val r = layout.bodyR * bellyScale[i].value
+                                    if ((tap - center).getDistance() <= r * 1.1f) {
+                                        if (state.release(i)) {
+                                            scope.launch {
+                                                audio.playFart()
+                                                gas[i].snapTo(0f)
+                                                gas[i].animateTo(1f, tween(800))
+                                            }
+                                        }
+                                        break
                                     }
                                 }
-                                break
                             }
+                            Phase.Replay -> {
+                                // Tap anywhere to start a fresh round from the top.
+                                state.reset()
+                                for (i in 0 until TrumperGameState.COUNT) {
+                                    scope.launch {
+                                        bellyScale[i].snapTo(1f)
+                                        gas[i].snapTo(0f)
+                                        emerge[i].snapTo(0f)
+                                    }
+                                }
+                                scope.launch { replayPulse.snapTo(0f) }
+                                scope.launch { confetti.snapTo(0f) }
+                                phase = Phase.Intro
+                            }
+                            else -> {}
                         }
                     }
                 }
@@ -187,30 +308,42 @@ fun TrumperGameScreen(onBack: () -> Unit) {
             drawSky(layout.groundY)
             drawGround(layout.groundY)
 
-            // Burrows the characters pop out of (fade away after the opening).
+            // Burrows the characters pop out of / hop back into (faded except at the ends).
             if (holeAlpha.value > 0.01f) {
                 for (i in layout.bases.indices) {
                     drawBurrow(layout.bases[i].x, layout.groundY, layout.bodyR, holeAlpha.value)
                 }
             }
 
+            val waveAmount = wave.value
+            val wavePhase = confetti.value * (CONFETTI_MS / 1000f) * 3f * (2f * PI.toFloat())
+
             for (i in layout.bases.indices) {
                 val scale = bellyScale[i].value
                 val popPx = (1f - emerge[i].value) * POP_DEPTH * layout.bodyR
                 val center = trumperBodyCenter(layout.bases[i], layout.bodyR, scale).toOffset() + Offset(0f, popPx)
-                if (!introDone) {
-                    // Still popping out: clip away the part below ground (inside the hole).
+                if (emerge[i].value < 0.999f) {
+                    // Mid-hop in or out of the hole: clip away the part below ground.
                     clipRect(0f, 0f, size.width, layout.groundY) {
-                        drawTrumper(center, layout.bodyR, scale, LOOKS[i])
+                        drawTrumper(center, layout.bodyR, scale, LOOKS[i], waveAmount, wavePhase)
                     }
                 } else {
                     // Gas puffs sit behind the character.
                     if (gas[i].value > 0f && gas[i].value < 1f) {
                         drawGas(center, layout.bodyR, gas[i].value)
                     }
-                    drawTrumper(center, layout.bodyR, scale, LOOKS[i])
+                    drawTrumper(center, layout.bodyR, scale, LOOKS[i], waveAmount, wavePhase)
                 }
             }
+
+            // Confetti rains over everything during the celebration.
+            if (confetti.value > 0f) drawConfetti(confettiPieces, confetti.value)
+
+            // Star tally of progress toward the goal, across the top.
+            drawStars(state.score, TrumperGameState.GOAL)
+
+            // Play-again button once everyone has waved goodbye.
+            if (phase == Phase.Replay) drawReplayButton(replayPulse.value)
         }
 
         BackButton(
@@ -335,8 +468,16 @@ private fun DrawScope.drawBurrow(cx: Float, groundY: Float, bodyR: Float, alpha:
 
 /** One little person: shadow, planted legs with shoes, shorts, a swelling shirt-belly,
  * arms with hands, a head with hair and a face that strains (reddens, mouth opens) as
- * the tummy [scale] grows. */
-private fun DrawScope.drawTrumper(center: Offset, bodyR: Float, scale: Float, look: TrumperLook) {
+ * the tummy [scale] grows. [waveAmount] (0..1) blends the arms up into an overhead
+ * goodbye wave that wiggles with [wavePhase]. */
+private fun DrawScope.drawTrumper(
+    center: Offset,
+    bodyR: Float,
+    scale: Float,
+    look: TrumperLook,
+    waveAmount: Float = 0f,
+    wavePhase: Float = 0f,
+) {
     val r = bodyR * scale
     val feetY = center.y + r
     // strain 0..1 — how bloated this character looks right now
@@ -381,14 +522,23 @@ private fun DrawScope.drawTrumper(center: Offset, bodyR: Float, scale: Float, lo
         size = Size(r * 1.24f, r * 0.55f),
     )
 
-    // Arms with little hands (lift out a little as the belly swells).
+    // Arms with little hands (lift out a little as the belly swells, and raise into an
+    // overhead wiggle when waving goodbye).
     val armColor = lerp(look.shirt, Color.Black, 0.15f)
     val armLift = strain * bodyR * 0.35f
     for (sx in listOf(-1f, 1f)) {
-        val handCenter = Offset(center.x + sx * r * 1.15f, center.y - armLift)
+        val shoulder = Offset(center.x + sx * r * 0.7f, center.y)
+        val rest = Offset(center.x + sx * r * 1.15f, center.y - armLift)
+        // Raised, wiggling hand for the goodbye wave (arms wave in opposite phase).
+        val wiggle = sin(wavePhase + if (sx < 0f) PI.toFloat() else 0f) * bodyR * 0.3f
+        val raised = Offset(center.x + sx * r * 0.85f + wiggle, center.y - r * 1.05f)
+        val handCenter = Offset(
+            rest.x + (raised.x - rest.x) * waveAmount,
+            rest.y + (raised.y - rest.y) * waveAmount,
+        )
         drawLine(
             color = armColor,
-            start = Offset(center.x + sx * r * 0.7f, center.y),
+            start = shoulder,
             end = handCenter,
             strokeWidth = bodyR * 0.18f,
             cap = androidx.compose.ui.graphics.StrokeCap.Round,
@@ -552,6 +702,79 @@ private fun DrawScope.drawGas(center: Offset, bodyR: Float, p: Float) {
         val e = Offset(s.x + bodyR * (0.6f + p * 0.6f) * cos(a), s.y - bodyR * 0.4f * (0.6f + p))
         drawLine(green.copy(alpha = fade * 0.6f), s, e, strokeWidth = bodyR * 0.04f)
     }
+}
+
+/** A five-pointed star outline path centred on [center]. */
+private fun starPath(center: Offset, rOuter: Float): Path {
+    val rInner = rOuter * 0.45f
+    val path = Path()
+    for (k in 0 until 10) {
+        val rr = if (k % 2 == 0) rOuter else rInner
+        val a = (-PI / 2.0 + k * PI / 5.0).toFloat()
+        val x = center.x + rr * cos(a)
+        val y = center.y + rr * sin(a)
+        if (k == 0) path.moveTo(x, y) else path.lineTo(x, y)
+    }
+    path.close()
+    return path
+}
+
+/** Row of [total] stars across the top; the first [filled] are gold (progress toward
+ * the goal), the rest are faint outlines. */
+private fun DrawScope.drawStars(filled: Int, total: Int) {
+    val r = size.height * 0.028f
+    val gap = r * 2.4f
+    val startX = size.width / 2f - gap * (total - 1) / 2f
+    val y = size.height * 0.085f
+    for (i in 0 until total) {
+        val center = Offset(startX + i * gap, y)
+        if (i < filled) {
+            drawPath(starPath(center, r), Color(0xFFFFD23F))
+            drawPath(starPath(center, r), Color(0xFFE0A800), style = Stroke(width = r * 0.12f))
+        } else {
+            drawPath(starPath(center, r), Color.White.copy(alpha = 0.25f))
+            drawPath(starPath(center, r), Color.White.copy(alpha = 0.5f), style = Stroke(width = r * 0.10f))
+        }
+    }
+}
+
+/** Falling confetti: each piece's position/rotation is derived from [progress] (0..1)
+ * so the rain is stable across recompositions, fading out as it completes. */
+private fun DrawScope.drawConfetti(pieces: List<Confetti>, progress: Float) {
+    val t = progress * (CONFETTI_MS / 1000f)
+    val span = size.height + size.width * 0.06f
+    val fade = if (progress > 0.85f) (1f - (progress - 0.85f) / 0.15f).coerceIn(0f, 1f) else 1f
+    for (c in pieces) {
+        val wrap = span + c.size * 2f
+        var y = (c.size + t * c.speed) % wrap - c.size
+        if (y < -c.size) y += wrap
+        val x = c.x0 + sin(t * c.driftFreq + c.phase) * c.driftAmp
+        rotate(degrees = t * c.rotSpeed * 60f, pivot = Offset(x, y)) {
+            drawRect(
+                color = c.color.copy(alpha = fade),
+                topLeft = Offset(x - c.size / 2f, y - c.size * 0.35f),
+                size = Size(c.size, c.size * 0.7f),
+            )
+        }
+    }
+}
+
+/** A big green play-again button with a white play triangle; [pulse] (0..1) gently
+ * breathes its size to invite a tap. */
+private fun DrawScope.drawReplayButton(pulse: Float) {
+    val center = Offset(size.width / 2f, size.height * 0.52f)
+    val r = size.height * 0.13f * (1f + pulse * 0.06f)
+    drawCircle(Color.White.copy(alpha = 0.35f), r * 1.18f, center)
+    drawCircle(Color(0xFF6BCB77), r, center)
+    drawCircle(Color.White, r, center, style = Stroke(width = r * 0.08f))
+    val s = r * 0.5f
+    val tri = Path().apply {
+        moveTo(center.x - s * 0.5f, center.y - s)
+        lineTo(center.x - s * 0.5f, center.y + s)
+        lineTo(center.x + s * 0.85f, center.y)
+        close()
+    }
+    drawPath(tri, Color.White)
 }
 
 /** Small rounded-rect helper drawn via [Path] (avoids importing CornerRadius types). */

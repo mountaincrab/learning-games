@@ -10,6 +10,7 @@ import {
   BLOAT_SCALE as bloatScale,
   TRAY_SIZE as traySize,
   TRUMPER_COUNT as trumperCount,
+  TRUMPER_GOAL as trumperGoal,
 } from 'learning-games-shared'
 
 export {
@@ -34,4 +35,5 @@ export type {
 
 export const TRAY_SIZE = traySize.get()
 export const TRUMPER_COUNT = trumperCount.get()
+export const TRUMPER_GOAL = trumperGoal.get()
 export const BLOAT_SCALE = bloatScale.get()

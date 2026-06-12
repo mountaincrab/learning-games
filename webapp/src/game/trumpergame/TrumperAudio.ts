@@ -19,6 +19,8 @@ export interface TrumperAudio {
   playFart(): void
   /** Shout character `id`'s name (0-based, column order). */
   playName(id: number): void
+  /** Play the round-win celebration cheer. */
+  playCheer(): void
 }
 
 export function createTrumperAudio(): TrumperAudio {
@@ -89,6 +91,26 @@ export function createTrumperAudio(): TrumperAudio {
       lfo.start(t)
       osc.stop(t + duration + 0.05)
       lfo.stop(t + duration + 0.05)
+    },
+    playCheer() {
+      // A bright little ascending arpeggio (C–E–G–C major triad) — the synthesised
+      // stand-in for Android's bundled cheer clip.
+      const ac = audioContext()
+      const t0 = ac.currentTime
+      const notes = [523.25, 659.25, 783.99, 1046.5]
+      notes.forEach((freq, i) => {
+        const t = t0 + i * 0.12
+        const osc = ac.createOscillator()
+        osc.type = 'triangle'
+        osc.frequency.setValueAtTime(freq, t)
+        const gain = ac.createGain()
+        gain.gain.setValueAtTime(0, t)
+        gain.gain.linearRampToValueAtTime(0.3, t + 0.02)
+        gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.35)
+        osc.connect(gain).connect(ac.destination)
+        osc.start(t)
+        osc.stop(t + 0.4)
+      })
     },
   }
 }
