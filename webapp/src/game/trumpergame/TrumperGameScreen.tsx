@@ -36,6 +36,23 @@ const LOOKS: TrumperLook[] = [
 
 const PANTS_COLOR = '#4A6FA5'
 
+// --- Opening sequence (each character pops out of its burrow shouting its name) ---
+// Audio clips are keyed by column order: 0 = Penny, 1 = Taz, 2 = Zach, 3 = Rory
+// (matching LOOKS and the bundled name OGGs). Mirrors the Android TrumperGameScreen.
+const INTRO_LEAD_MS = 600 // a beat before the first pop (shows burrows, lets clips load)
+const INTRO_JUMP_MS = 1300 // length of one character's pop-out jump
+const INTRO_STAGGER_MS = 2000 // delay between one character popping out and the next
+const POP_DEPTH = 2.3 // how far below ground (×bodyR) a not-yet-emerged character hides
+const INTRO_TOTAL_MS = INTRO_LEAD_MS + INTRO_STAGGER_MS * (TRUMPER_COUNT - 1) + INTRO_JUMP_MS
+
+/** Overshoot ("back") ease-out: rises past the resting spot then settles — a little
+ * hop as the character lands out of the hole. */
+function easeOutBack(t: number): number {
+  const s = 2.0
+  const p = t - 1
+  return 1 + (s + 1) * p * p * p + s * p * p
+}
+
 export default function TrumperGameScreen({ onBack }: { onBack: () => void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const stateRef = useRef<TrumperGameState>()
@@ -47,14 +64,24 @@ export default function TrumperGameScreen({ onBack }: { onBack: () => void }) {
   const gasRef = useRef(Array.from({ length: TRUMPER_COUNT }, () => ({ active: false, elapsed: 0 })))
   const layoutRef = useRef<{ w: number; h: number; layout: TrumperLayout } | null>(null)
 
-  // Bloat a random character at gentle random intervals.
+  // Opening sequence state, advanced each frame: total elapsed time, which names have
+  // been shouted, whether the show is over, and the fading burrow opacity.
+  const introRef = useRef({
+    elapsed: 0,
+    played: Array.from({ length: TRUMPER_COUNT }, () => false),
+    done: false,
+    holeAlpha: 1,
+  })
+
+  // Bloat a random character at gentle random intervals — but only after the opening
+  // sequence has finished and everyone is standing in their row.
   useEffect(() => {
     let timer = 0
     const tick = () => {
       stateRef.current!.bloatRandom()
       timer = window.setTimeout(tick, 900 + Math.random() * 2200)
     }
-    timer = window.setTimeout(tick, 900 + Math.random() * 2200)
+    timer = window.setTimeout(tick, INTRO_TOTAL_MS + 600 + Math.random() * 1500)
     return () => clearTimeout(timer)
   }, [])
 
@@ -64,6 +91,19 @@ export default function TrumperGameScreen({ onBack }: { onBack: () => void }) {
       layoutRef.current = { w, h, layout: computeTrumperLayout(w, h) }
     }
     const layout = layoutRef.current.layout
+
+    // Advance the opening sequence: stagger the pops, shout each name once as it
+    // starts, then fade the burrows out when everyone is up.
+    const intro = introRef.current
+    intro.elapsed += dt
+    for (let i = 0; i < TRUMPER_COUNT; i++) {
+      if (!intro.played[i] && intro.elapsed >= INTRO_LEAD_MS + i * INTRO_STAGGER_MS) {
+        intro.played[i] = true
+        audio.playName(i)
+      }
+    }
+    if (!intro.done && intro.elapsed >= INTRO_TOTAL_MS) intro.done = true
+    if (intro.done && intro.holeAlpha > 0) intro.holeAlpha = Math.max(0, intro.holeAlpha - dt / 500)
 
     // Drive each belly toward its target: a slow bouncy swell, a quick shrink.
     for (let i = 0; i < TRUMPER_COUNT; i++) {
@@ -90,20 +130,43 @@ export default function TrumperGameScreen({ onBack }: { onBack: () => void }) {
 
     drawSky(ctx, w, h, layout.groundY)
     drawGround(ctx, w, h, layout.groundY)
+
+    // Burrows the characters pop out of (fade away after the opening).
+    if (intro.holeAlpha > 0.01) {
+      for (let i = 0; i < layout.bases.length; i++) {
+        drawBurrow(ctx, layout.bases[i].x, layout.groundY, layout.bodyR, intro.holeAlpha)
+      }
+    }
+
     for (let i = 0; i < layout.bases.length; i++) {
       const scale = bellyRef.current[i].value
-      const center = trumperBodyCenter(layout.bases[i], layout.bodyR, scale)
-      // Gas puffs sit behind the character.
-      const gas = gasRef.current[i]
-      if (gas.active) {
-        drawGas(ctx, center, layout.bodyR, gas.elapsed / GAS_DURATION_MS)
+      const emerge = easeOutBack(
+        Math.min(Math.max((intro.elapsed - INTRO_LEAD_MS - i * INTRO_STAGGER_MS) / INTRO_JUMP_MS, 0), 1),
+      )
+      const popPx = (1 - emerge) * POP_DEPTH * layout.bodyR
+      const base = trumperBodyCenter(layout.bases[i], layout.bodyR, scale)
+      const center = { x: base.x, y: base.y + popPx }
+      if (!intro.done) {
+        // Still popping out: clip away the part below ground (inside the hole).
+        ctx.save()
+        ctx.beginPath()
+        ctx.rect(0, 0, w, layout.groundY)
+        ctx.clip()
+        drawTrumper(ctx, center, layout.bodyR, scale, LOOKS[i])
+        ctx.restore()
+      } else {
+        // Gas puffs sit behind the character.
+        const gas = gasRef.current[i]
+        if (gas.active) {
+          drawGas(ctx, center, layout.bodyR, gas.elapsed / GAS_DURATION_MS)
+        }
+        drawTrumper(ctx, center, layout.bodyR, scale, LOOKS[i])
       }
-      drawTrumper(ctx, center, layout.bodyR, scale, LOOKS[i])
     }
   })
 
   const onPointerDown = (e: PointerEvent<HTMLCanvasElement>) => {
-    if (!layoutRef.current) return
+    if (!layoutRef.current || !introRef.current.done) return
     const rect = e.currentTarget.getBoundingClientRect()
     const tap = { x: e.clientX - rect.left, y: e.clientY - rect.top }
     const state = stateRef.current!
@@ -227,6 +290,25 @@ function drawGrassTuft(ctx: CanvasRenderingContext2D, base: { x: number; y: numb
     ctx.lineTo(base.x + sx * h * 0.55, base.y - h * (0.7 - Math.abs(sx) * 0.2))
     ctx.stroke()
   }
+}
+
+/** A little dirt burrow opening straddling the ground line, that a character pops out
+ * of during the opening sequence. `alpha` fades the whole thing in/out. */
+function drawBurrow(ctx: CanvasRenderingContext2D, cx: number, groundY: number, bodyR: number, alpha: number) {
+  const rimW = bodyR * 1.7
+  const rimH = bodyR * 0.5
+  // Mounded dirt rim sitting on the grass.
+  ctx.fillStyle = `rgba(122,82,48,${alpha})`
+  ctx.beginPath()
+  ctx.ellipse(cx, groundY - rimH * 0.05, rimW / 2, rimH / 2, 0, 0, Math.PI * 2)
+  ctx.fill()
+  // Dark opening the character rises out of.
+  const openW = rimW * 0.74
+  const openH = rimH * 0.7
+  ctx.fillStyle = `rgba(42,27,16,${alpha})`
+  ctx.beginPath()
+  ctx.ellipse(cx, groundY, openW / 2, openH / 2, 0, 0, Math.PI * 2)
+  ctx.fill()
 }
 
 /** One little person: shadow, planted legs with shoes, shorts, a swelling shirt-belly,
