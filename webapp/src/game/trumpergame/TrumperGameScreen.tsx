@@ -1,4 +1,4 @@
-import { PointerEvent, useEffect, useMemo, useRef } from 'react'
+import { PointerEvent, useMemo, useRef } from 'react'
 import { DampingRatio, Spring, Stiffness } from '../../anim'
 import { useGameCanvas } from '../../useGameCanvas'
 import BackButton from '../../ui/components/BackButton'
@@ -7,6 +7,7 @@ import {
   BLOAT_SCALE,
   computeTrumperLayout,
   TRUMPER_COUNT,
+  TRUMPER_GOAL,
   TrumperGameState,
   trumperBodyCenter,
   TrumperLayout,
@@ -45,12 +46,72 @@ const INTRO_STAGGER_MS = 2000 // delay between one character popping out and the
 const POP_DEPTH = 2.3 // how far below ground (×bodyR) a not-yet-emerged character hides
 const INTRO_TOTAL_MS = INTRO_LEAD_MS + INTRO_STAGGER_MS * (TRUMPER_COUNT - 1) + INTRO_JUMP_MS
 
+// --- Round flow ---------------------------------------------------------------
+// A round runs intro → play → celebrate → outro → replay, then loops back to intro
+// when the child taps the play-again button. Mirrors the Android TrumperGameScreen.
+type Phase = 'intro' | 'play' | 'celebrate' | 'outro' | 'replay'
+const CELEBRATE_MS = 2200 // confetti + cheer + wave hold before the goodbye
+const OUTRO_JUMP_MS = 700 // one character's hop back down into its burrow
+const OUTRO_STAGGER_MS = 320 // delay between one character diving in and the next
+const OUTRO_TOTAL_MS = OUTRO_STAGGER_MS * (TRUMPER_COUNT - 1) + OUTRO_JUMP_MS
+const CONFETTI_MS = 4200 // falling-confetti run (covers celebrate + goodbye)
+const CONFETTI_COUNT = 70
+const CONFETTI_COLORS = ['#FF6B6B', '#FFD93D', '#6BCB77', '#4D96FF', '#B983FF', '#FF9F45']
+
+/** One falling confetti piece; its motion is computed analytically from elapsed time. */
+interface Confetti {
+  x0: number
+  color: string
+  size: number
+  speed: number
+  driftAmp: number
+  driftFreq: number
+  phase: number
+  rotSpeed: number
+}
+
 /** Overshoot ("back") ease-out: rises past the resting spot then settles — a little
  * hop as the character lands out of the hole. */
 function easeOutBack(t: number): number {
   const s = 2.0
   const p = t - 1
   return 1 + (s + 1) * p * p * p + s * p * p
+}
+
+/** Anticipation ("back") ease-in: dips back before diving down — used as the
+ * characters hop back into their burrows at the end of a round. */
+function easeInBack(t: number): number {
+  const s = 1.7
+  return t * t * ((s + 1) * t - s)
+}
+
+const clamp01 = (x: number) => Math.min(Math.max(x, 0), 1)
+
+/** Where character `i` sits between burrow (0) and standing (1) for the current flow. */
+function trumperEmerge(f: { phase: Phase; t: number }, i: number): number {
+  switch (f.phase) {
+    case 'intro':
+      return easeOutBack(clamp01((f.t - INTRO_LEAD_MS - i * INTRO_STAGGER_MS) / INTRO_JUMP_MS))
+    case 'outro':
+      return 1 - easeInBack(clamp01((f.t - i * OUTRO_STAGGER_MS) / OUTRO_JUMP_MS))
+    case 'replay':
+      return 0
+    default:
+      return 1
+  }
+}
+
+function makeConfetti(w: number, h: number): Confetti[] {
+  return Array.from({ length: CONFETTI_COUNT }, () => ({
+    x0: Math.random() * w,
+    color: CONFETTI_COLORS[Math.floor(Math.random() * CONFETTI_COLORS.length)],
+    size: w * 0.008 + Math.random() * w * 0.012,
+    speed: h * 0.25 + Math.random() * h * 0.4,
+    driftAmp: w * 0.015 + Math.random() * w * 0.03,
+    driftFreq: 1.5 + Math.random() * 2.5,
+    phase: Math.random() * 2 * Math.PI,
+    rotSpeed: (Math.random() - 0.5) * 12,
+  }))
 }
 
 export default function TrumperGameScreen({ onBack }: { onBack: () => void }) {
@@ -63,27 +124,30 @@ export default function TrumperGameScreen({ onBack }: { onBack: () => void }) {
   const bellyRef = useRef(Array.from({ length: TRUMPER_COUNT }, () => new Spring(1)))
   const gasRef = useRef(Array.from({ length: TRUMPER_COUNT }, () => ({ active: false, elapsed: 0 })))
   const layoutRef = useRef<{ w: number; h: number; layout: TrumperLayout } | null>(null)
+  const confettiRef = useRef<{ w: number; h: number; pieces: Confetti[] } | null>(null)
 
-  // Opening sequence state, advanced each frame: total elapsed time, which names have
-  // been shouted, whether the show is over, and the fading burrow opacity.
-  const introRef = useRef({
-    elapsed: 0,
+  // Round-flow state, advanced each frame: which phase we're in and how long we've been
+  // in it, the per-character name-shout flags, fading burrow opacity, confetti/wave
+  // progress, the cheer-once latch, the next-bloat countdown and the replay pulse clock.
+  const flow = useRef({
+    phase: 'intro' as Phase,
+    t: 0,
     played: Array.from({ length: TRUMPER_COUNT }, () => false),
-    done: false,
     holeAlpha: 1,
+    confetti: 0,
+    wave: 0,
+    cheered: false,
+    bloatTimer: 0,
+    replayT: 0,
   })
 
-  // Bloat a random character at gentle random intervals — but only after the opening
-  // sequence has finished and everyone is standing in their row.
-  useEffect(() => {
-    let timer = 0
-    const tick = () => {
-      stateRef.current!.bloatRandom()
-      timer = window.setTimeout(tick, 900 + Math.random() * 2200)
-    }
-    timer = window.setTimeout(tick, INTRO_TOTAL_MS + 600 + Math.random() * 1500)
-    return () => clearTimeout(timer)
-  }, [])
+  const setPhase = (p: Phase) => {
+    const f = flow.current
+    f.phase = p
+    f.t = 0
+    if (p === 'play') f.bloatTimer = 900 + Math.random() * 2200
+    if (p === 'celebrate') f.cheered = false
+  }
 
   useGameCanvas(canvasRef, (ctx, w, h, dt) => {
     const state = stateRef.current!
@@ -91,24 +155,67 @@ export default function TrumperGameScreen({ onBack }: { onBack: () => void }) {
       layoutRef.current = { w, h, layout: computeTrumperLayout(w, h) }
     }
     const layout = layoutRef.current.layout
+    if (!confettiRef.current || confettiRef.current.w !== w || confettiRef.current.h !== h) {
+      confettiRef.current = { w, h, pieces: makeConfetti(w, h) }
+    }
 
-    // Advance the opening sequence: stagger the pops, shout each name once as it
-    // starts, then fade the burrows out when everyone is up.
-    const intro = introRef.current
-    intro.elapsed += dt
-    for (let i = 0; i < TRUMPER_COUNT; i++) {
-      if (!intro.played[i] && intro.elapsed >= INTRO_LEAD_MS + i * INTRO_STAGGER_MS) {
-        intro.played[i] = true
-        audio.playName(i)
+    const f = flow.current
+    f.t += dt
+    switch (f.phase) {
+      case 'intro': {
+        // Stagger the pops, shouting each name once as it starts, then fade the burrows.
+        for (let i = 0; i < TRUMPER_COUNT; i++) {
+          if (!f.played[i] && f.t >= INTRO_LEAD_MS + i * INTRO_STAGGER_MS) {
+            f.played[i] = true
+            audio.playName(i)
+          }
+        }
+        if (f.t >= INTRO_TOTAL_MS) {
+          f.holeAlpha = Math.max(0, f.holeAlpha - dt / 500)
+          if (f.holeAlpha <= 0) setPhase('play')
+        }
+        break
+      }
+      case 'play': {
+        f.bloatTimer -= dt
+        if (f.bloatTimer <= 0) {
+          state.bloatRandom()
+          f.bloatTimer = 900 + Math.random() * 2200
+        }
+        if (state.isWon) setPhase('celebrate')
+        break
+      }
+      case 'celebrate': {
+        if (!f.cheered) {
+          audio.playCheer()
+          f.cheered = true
+        }
+        f.wave = Math.min(1, f.wave + dt / 400)
+        f.confetti = Math.min(1, f.confetti + dt / CONFETTI_MS)
+        if (f.t >= CELEBRATE_MS) setPhase('outro')
+        break
+      }
+      case 'outro': {
+        f.holeAlpha = Math.min(1, f.holeAlpha + dt / 400)
+        f.confetti = Math.min(1, f.confetti + dt / CONFETTI_MS)
+        if (f.t >= OUTRO_TOTAL_MS) {
+          f.wave = 0
+          setPhase('replay')
+        }
+        break
+      }
+      case 'replay': {
+        f.replayT += dt
+        f.confetti = Math.min(1, f.confetti + dt / CONFETTI_MS)
+        break
       }
     }
-    if (!intro.done && intro.elapsed >= INTRO_TOTAL_MS) intro.done = true
-    if (intro.done && intro.holeAlpha > 0) intro.holeAlpha = Math.max(0, intro.holeAlpha - dt / 500)
 
-    // Drive each belly toward its target: a slow bouncy swell, a quick shrink.
+    // Drive each belly toward its target: a bouncy swell while bloated in play, a quick
+    // shrink otherwise (so everyone deflates for the celebration).
     for (let i = 0; i < TRUMPER_COUNT; i++) {
       const belly = bellyRef.current[i]
-      const target = state.isBloated(i) ? BLOAT_SCALE : 1
+      const target = state.isBloated(i) && f.phase === 'play' ? BLOAT_SCALE : 1
       if (belly.target !== target) {
         if (target > 1) belly.animateTo(target, Stiffness.veryLow, DampingRatio.lowBouncy)
         else belly.animateTo(target, 900, DampingRatio.noBouncy) // ≈ the 220ms shrink tween
@@ -131,28 +238,27 @@ export default function TrumperGameScreen({ onBack }: { onBack: () => void }) {
     drawSky(ctx, w, h, layout.groundY)
     drawGround(ctx, w, h, layout.groundY)
 
-    // Burrows the characters pop out of (fade away after the opening).
-    if (intro.holeAlpha > 0.01) {
+    // Burrows the characters pop out of / hop back into (faded except at the ends).
+    if (f.holeAlpha > 0.01) {
       for (let i = 0; i < layout.bases.length; i++) {
-        drawBurrow(ctx, layout.bases[i].x, layout.groundY, layout.bodyR, intro.holeAlpha)
+        drawBurrow(ctx, layout.bases[i].x, layout.groundY, layout.bodyR, f.holeAlpha)
       }
     }
 
+    const wavePhase = f.confetti * (CONFETTI_MS / 1000) * 3 * (2 * Math.PI)
     for (let i = 0; i < layout.bases.length; i++) {
       const scale = bellyRef.current[i].value
-      const emerge = easeOutBack(
-        Math.min(Math.max((intro.elapsed - INTRO_LEAD_MS - i * INTRO_STAGGER_MS) / INTRO_JUMP_MS, 0), 1),
-      )
+      const emerge = trumperEmerge(f, i)
       const popPx = (1 - emerge) * POP_DEPTH * layout.bodyR
       const base = trumperBodyCenter(layout.bases[i], layout.bodyR, scale)
       const center = { x: base.x, y: base.y + popPx }
-      if (!intro.done) {
-        // Still popping out: clip away the part below ground (inside the hole).
+      if (emerge < 0.999) {
+        // Mid-hop in or out of the hole: clip away the part below ground.
         ctx.save()
         ctx.beginPath()
         ctx.rect(0, 0, w, layout.groundY)
         ctx.clip()
-        drawTrumper(ctx, center, layout.bodyR, scale, LOOKS[i])
+        drawTrumper(ctx, center, layout.bodyR, scale, LOOKS[i], f.wave, wavePhase)
         ctx.restore()
       } else {
         // Gas puffs sit behind the character.
@@ -160,16 +266,48 @@ export default function TrumperGameScreen({ onBack }: { onBack: () => void }) {
         if (gas.active) {
           drawGas(ctx, center, layout.bodyR, gas.elapsed / GAS_DURATION_MS)
         }
-        drawTrumper(ctx, center, layout.bodyR, scale, LOOKS[i])
+        drawTrumper(ctx, center, layout.bodyR, scale, LOOKS[i], f.wave, wavePhase)
       }
+    }
+
+    // Confetti rains over everything during the celebration.
+    if (f.confetti > 0) drawConfetti(ctx, confettiRef.current.pieces, f.confetti, w, h)
+
+    // Star tally of progress toward the goal, across the top.
+    drawStars(ctx, w, h, state.score, TRUMPER_GOAL)
+
+    // Play-again button once everyone has waved goodbye.
+    if (f.phase === 'replay') {
+      const pulse = (1 - Math.cos((f.replayT / 700) * Math.PI)) / 2
+      drawReplayButton(ctx, w, h, pulse)
     }
   })
 
   const onPointerDown = (e: PointerEvent<HTMLCanvasElement>) => {
-    if (!layoutRef.current || !introRef.current.done) return
+    if (!layoutRef.current) return
+    const f = flow.current
+    const state = stateRef.current!
+
+    if (f.phase === 'replay') {
+      // Tap anywhere to start a fresh round from the top.
+      state.reset()
+      for (let i = 0; i < TRUMPER_COUNT; i++) {
+        bellyRef.current[i] = new Spring(1)
+        gasRef.current[i] = { active: false, elapsed: 0 }
+      }
+      f.played = Array.from({ length: TRUMPER_COUNT }, () => false)
+      f.holeAlpha = 1
+      f.confetti = 0
+      f.wave = 0
+      f.cheered = false
+      f.replayT = 0
+      setPhase('intro')
+      return
+    }
+    if (f.phase !== 'play') return
+
     const rect = e.currentTarget.getBoundingClientRect()
     const tap = { x: e.clientX - rect.left, y: e.clientY - rect.top }
-    const state = stateRef.current!
     const layout = layoutRef.current.layout
     for (let i = 0; i < layout.bases.length; i++) {
       if (!state.isBloated(i)) continue
@@ -313,13 +451,16 @@ function drawBurrow(ctx: CanvasRenderingContext2D, cx: number, groundY: number, 
 
 /** One little person: shadow, planted legs with shoes, shorts, a swelling shirt-belly,
  * arms with hands, a head with hair and a face that strains (reddens, mouth opens) as
- * the tummy scale grows. */
+ * the tummy scale grows. `waveAmount` (0..1) blends the arms up into an overhead
+ * goodbye wave that wiggles with `wavePhase`. */
 function drawTrumper(
   ctx: CanvasRenderingContext2D,
   center: { x: number; y: number },
   bodyR: number,
   scale: number,
   look: TrumperLook,
+  waveAmount = 0,
+  wavePhase = 0,
 ) {
   const r = bodyR * scale
   const feetY = center.y + r
@@ -354,16 +495,25 @@ function drawTrumper(
   ctx.ellipse(center.x, feetY - r * 0.55 + r * 0.275, r * 0.62, r * 0.275, 0, 0, Math.PI * 2)
   ctx.fill()
 
-  // Arms with little hands (lift out a little as the belly swells).
+  // Arms with little hands (lift out a little as the belly swells, and raise into an
+  // overhead wiggle when waving goodbye).
   const armColor = lerpColor(look.shirt, '#000000', 0.15)
   const armLift = strain * bodyR * 0.35
   ctx.strokeStyle = armColor
   ctx.lineWidth = bodyR * 0.18
   ctx.lineCap = 'round'
   for (const sx of [-1, 1]) {
-    const handCenter = { x: center.x + sx * r * 1.15, y: center.y - armLift }
+    const shoulder = { x: center.x + sx * r * 0.7, y: center.y }
+    const rest = { x: center.x + sx * r * 1.15, y: center.y - armLift }
+    // Raised, wiggling hand for the goodbye wave (arms wave in opposite phase).
+    const wiggle = Math.sin(wavePhase + (sx < 0 ? Math.PI : 0)) * bodyR * 0.3
+    const raised = { x: center.x + sx * r * 0.85 + wiggle, y: center.y - r * 1.05 }
+    const handCenter = {
+      x: rest.x + (raised.x - rest.x) * waveAmount,
+      y: rest.y + (raised.y - rest.y) * waveAmount,
+    }
     ctx.beginPath()
-    ctx.moveTo(center.x + sx * r * 0.7, center.y)
+    ctx.moveTo(shoulder.x, shoulder.y)
     ctx.lineTo(handCenter.x, handCenter.y)
     ctx.stroke()
     circle(ctx, look.skin, bodyR * 0.13, handCenter)
@@ -532,5 +682,96 @@ function drawGas(ctx: CanvasRenderingContext2D, center: { x: number; y: number }
 function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
   ctx.beginPath()
   ctx.roundRect(x, y, w, h, r)
+  ctx.fill()
+}
+
+/** Trace a five-pointed star path centred on (cx, cy). */
+function starPath(ctx: CanvasRenderingContext2D, cx: number, cy: number, rOuter: number) {
+  const rInner = rOuter * 0.45
+  ctx.beginPath()
+  for (let k = 0; k < 10; k++) {
+    const rr = k % 2 === 0 ? rOuter : rInner
+    const a = -Math.PI / 2 + (k * Math.PI) / 5
+    const x = cx + rr * Math.cos(a)
+    const y = cy + rr * Math.sin(a)
+    if (k === 0) ctx.moveTo(x, y)
+    else ctx.lineTo(x, y)
+  }
+  ctx.closePath()
+}
+
+/** Row of `total` stars across the top; the first `filled` are gold, the rest faint. */
+function drawStars(ctx: CanvasRenderingContext2D, w: number, h: number, filled: number, total: number) {
+  const r = h * 0.028
+  const gap = r * 2.4
+  const startX = w / 2 - (gap * (total - 1)) / 2
+  const y = h * 0.085
+  for (let i = 0; i < total; i++) {
+    const cx = startX + i * gap
+    starPath(ctx, cx, y, r)
+    if (i < filled) {
+      ctx.fillStyle = '#FFD23F'
+      ctx.fill()
+      ctx.lineWidth = r * 0.12
+      ctx.strokeStyle = '#E0A800'
+      ctx.stroke()
+    } else {
+      ctx.fillStyle = 'rgba(255,255,255,0.25)'
+      ctx.fill()
+      ctx.lineWidth = r * 0.1
+      ctx.strokeStyle = 'rgba(255,255,255,0.5)'
+      ctx.stroke()
+    }
+  }
+}
+
+/** Falling confetti: each piece's position/rotation is derived from `progress` (0..1)
+ * so the rain is stable across frames, fading out as it completes. */
+function drawConfetti(ctx: CanvasRenderingContext2D, pieces: Confetti[], progress: number, w: number, h: number) {
+  const t = progress * (CONFETTI_MS / 1000)
+  const span = h + w * 0.06
+  const fade = progress > 0.85 ? clamp01(1 - (progress - 0.85) / 0.15) : 1
+  ctx.globalAlpha = fade
+  for (const c of pieces) {
+    const wrap = span + c.size * 2
+    let y = ((c.size + t * c.speed) % wrap) - c.size
+    if (y < -c.size) y += wrap
+    const x = c.x0 + Math.sin(t * c.driftFreq + c.phase) * c.driftAmp
+    ctx.save()
+    ctx.translate(x, y)
+    ctx.rotate((t * c.rotSpeed * 60 * Math.PI) / 180)
+    ctx.fillStyle = c.color
+    ctx.fillRect(-c.size / 2, -c.size * 0.35, c.size, c.size * 0.7)
+    ctx.restore()
+  }
+  ctx.globalAlpha = 1
+}
+
+/** A big green play-again button with a white play triangle; `pulse` (0..1) gently
+ * breathes its size to invite a tap. */
+function drawReplayButton(ctx: CanvasRenderingContext2D, w: number, h: number, pulse: number) {
+  const cx = w / 2
+  const cy = h * 0.52
+  const r = h * 0.13 * (1 + pulse * 0.06)
+  ctx.fillStyle = 'rgba(255,255,255,0.35)'
+  ctx.beginPath()
+  ctx.arc(cx, cy, r * 1.18, 0, Math.PI * 2)
+  ctx.fill()
+  ctx.fillStyle = '#6BCB77'
+  ctx.beginPath()
+  ctx.arc(cx, cy, r, 0, Math.PI * 2)
+  ctx.fill()
+  ctx.strokeStyle = '#FFFFFF'
+  ctx.lineWidth = r * 0.08
+  ctx.beginPath()
+  ctx.arc(cx, cy, r, 0, Math.PI * 2)
+  ctx.stroke()
+  const s = r * 0.5
+  ctx.fillStyle = '#FFFFFF'
+  ctx.beginPath()
+  ctx.moveTo(cx - s * 0.5, cy - s)
+  ctx.lineTo(cx - s * 0.5, cy + s)
+  ctx.lineTo(cx + s * 0.85, cy)
+  ctx.closePath()
   ctx.fill()
 }

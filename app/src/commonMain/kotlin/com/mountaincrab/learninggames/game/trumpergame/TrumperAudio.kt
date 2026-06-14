@@ -15,6 +15,9 @@ interface TrumperAudio {
 
     /** Shout character [id]'s name (0-based, column order), if its clip is bundled. */
     fun playName(id: Int)
+
+    /** Play the round-win celebration cheer, if it's bundled. */
+    fun playCheer()
 }
 
 /** Remembers a platform [TrumperAudio], releasing it when it leaves the composition. */

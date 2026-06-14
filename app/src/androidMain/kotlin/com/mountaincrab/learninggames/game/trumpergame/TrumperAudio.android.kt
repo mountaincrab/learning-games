@@ -48,6 +48,9 @@ private class AndroidTrumperAudio(context: Context) : TrumperAudio {
     /** SoundPool sample id per character (column order), or 0 if its clip is absent. */
     private val nameIds = IntArray(NAME_FILES.size)
 
+    /** SoundPool sample id for the win cheer (`cheer.ogg`), or 0 if it is absent. */
+    private var cheerId = 0
+
     init {
         soundPool.setOnLoadCompleteListener { _, sampleId, status ->
             if (status == 0) synchronized(ready) { ready += sampleId }
@@ -59,6 +62,9 @@ private class AndroidTrumperAudio(context: Context) : TrumperAudio {
         NAME_FILES.forEachIndexed { i, file ->
             val res = rawId("name_$file")
             nameIds[i] = if (res != 0) soundPool.load(appContext, res, 1) else 0
+        }
+        rawId("cheer").let { res ->
+            cheerId = if (res != 0) soundPool.load(appContext, res, 1) else 0
         }
     }
 
@@ -75,6 +81,12 @@ private class AndroidTrumperAudio(context: Context) : TrumperAudio {
         if (sampleId == 0) return
         if (synchronized(ready) { sampleId !in ready }) return
         soundPool.play(sampleId, 1f, 1f, 1, 0, 1f)
+    }
+
+    override fun playCheer() {
+        if (cheerId == 0) return
+        if (synchronized(ready) { cheerId !in ready }) return
+        soundPool.play(cheerId, 1f, 1f, 1, 0, 1f)
     }
 
     fun release() {
